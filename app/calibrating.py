@@ -49,6 +49,7 @@ class CalibrationRequest:
     device_type: str  # "robot" or "teleop"
     port: str
     config_file: str
+    robot_name: Optional[str] = None  # When set, write port + config back into the robot record on success
 
 
 class CalibrationManager:
@@ -66,7 +67,8 @@ class CalibrationManager:
         self._mins = {}
         self._maxes = {}
         self._homing_offsets = {}
-        
+        self._current_request: Optional[CalibrationRequest] = None
+
         # Initialize logging
         init_logging()
 
@@ -149,6 +151,7 @@ class CalibrationManager:
                 current_positions=None,
                 recorded_ranges=None
             )
+            self._current_request = request
 
             # Start calibration in a separate thread
             self.calibration_thread = threading.Thread(
@@ -466,6 +469,20 @@ class CalibrationManager:
         self.device._save_calibration()
         
         logger.info(f"Calibration saved to {self.device.calibration_fpath}")
+
+        # Robot-record write-back: if this calibration was launched from a tile,
+        # update the robot's port + config field for the side that was just calibrated.
+        request = self._current_request
+        if request is not None and request.robot_name:
+            from .config import save_robot_record
+            if request.device_type == "teleop":
+                patch = {"leader_port": request.port, "leader_config": f"{request.config_file}.json"}
+            elif request.device_type == "robot":
+                patch = {"follower_port": request.port, "follower_config": f"{request.config_file}.json"}
+            else:
+                patch = None
+            if patch is not None:
+                save_robot_record(request.robot_name, patch, allow_create=False)
 
     def _cleanup_and_finish(self, message: str, status: str = "completed"):
         """Clean up and finish calibration"""
