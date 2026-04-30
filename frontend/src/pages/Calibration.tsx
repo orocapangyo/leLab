@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -53,6 +53,7 @@ interface CalibrationRequest {
   device_type: string; // "robot" or "teleop"
   port: string;
   config_file: string;
+  robot_name: string | null;
 }
 
 interface CalibrationConfig {
@@ -66,6 +67,8 @@ interface CalibrationConfig {
 
 const Calibration = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const robotName = (location.state as { robot_name?: string } | null)?.robot_name ?? null;
   const { toast } = useToast();
   const { baseUrl, fetchWithHeaders } = useApi();
 
@@ -76,6 +79,45 @@ const Calibration = () => {
   const [deviceType, setDeviceType] = useState<string>("robot");
   const [port, setPort] = useState<string>("");
   const [configFile, setConfigFile] = useState<string>("");
+
+  // If we arrived from a robot tile, pre-fill the form from that robot's record.
+  useEffect(() => {
+    if (!robotName) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetchWithHeaders(
+          `${baseUrl}/robots/${encodeURIComponent(robotName)}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const robot = data.robot;
+        if (!robot || cancelled) return;
+        // Default to whichever side still needs calibration.
+        const defaultDevice =
+          !robot.leader_config && robot.follower_config
+            ? "robot"
+            : "teleop";
+        setDeviceType(defaultDevice);
+        if (defaultDevice === "teleop") {
+          setPort(robot.leader_port || "");
+          setConfigFile(
+            robot.leader_config ? robot.leader_config.replace(/\.json$/, "") : ""
+          );
+        } else {
+          setPort(robot.follower_port || "");
+          setConfigFile(
+            robot.follower_config ? robot.follower_config.replace(/\.json$/, "") : ""
+          );
+        }
+      } catch (e) {
+        console.error("Failed to load robot record for prefill:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [robotName, baseUrl, fetchWithHeaders]);
 
   // Config loading and management
   const [isLoadingConfigs, setIsLoadingConfigs] = useState(false);
@@ -167,6 +209,7 @@ const Calibration = () => {
       device_type: deviceType,
       port: port,
       config_file: configFile,
+      robot_name: robotName,
     };
 
     try {
@@ -390,6 +433,33 @@ const Calibration = () => {
     loadDefaultPort();
   }, [deviceType]);
 
+  const handleDeviceTypeChange = async (next: string) => {
+    setDeviceType(next);
+    if (!robotName) return;
+    try {
+      const res = await fetchWithHeaders(
+        `${baseUrl}/robots/${encodeURIComponent(robotName)}`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const robot = data.robot;
+      if (!robot) return;
+      if (next === "teleop") {
+        setPort(robot.leader_port || "");
+        setConfigFile(
+          robot.leader_config ? robot.leader_config.replace(/\.json$/, "") : ""
+        );
+      } else {
+        setPort(robot.follower_port || "");
+        setConfigFile(
+          robot.follower_config ? robot.follower_config.replace(/\.json$/, "") : ""
+        );
+      }
+    } catch (e) {
+      console.error("Failed to swap robot record on device toggle:", e);
+    }
+  };
+
   // Handle port detection
   const handlePortDetection = () => {
     const robotType = deviceType === "robot" ? "follower" : "leader";
@@ -488,7 +558,7 @@ const Calibration = () => {
                 >
                   Device Type *
                 </Label>
-                <Select value={deviceType} onValueChange={setDeviceType}>
+                <Select value={deviceType} onValueChange={handleDeviceTypeChange}>
                   <SelectTrigger className="bg-slate-700 border-slate-600 text-white rounded-md">
                     <SelectValue placeholder="Select device type" />
                   </SelectTrigger>
