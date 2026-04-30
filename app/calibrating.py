@@ -482,7 +482,10 @@ class CalibrationManager:
             else:
                 patch = None
             if patch is not None:
-                save_robot_record(request.robot_name, patch, allow_create=False)
+                try:
+                    save_robot_record(request.robot_name, patch, allow_create=False)
+                except Exception as e:
+                    logger.warning(f"Robot-record write-back failed for {request.robot_name}: {e}")
 
     def _cleanup_and_finish(self, message: str, status: str = "completed"):
         """Clean up and finish calibration"""
