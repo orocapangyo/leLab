@@ -49,11 +49,12 @@ from .training import (
 
 # Import our custom replay functionality
 from .replaying import (
-    ReplayRequest,
+    StartReplayRequest,
+    ReplayControlRequest,
     handle_start_replay,
+    handle_replay_control,
     handle_stop_replay,
     handle_replay_status,
-    handle_replay_logs,
 )
 
 from .hf_auth import handle_hf_auth_status
@@ -394,28 +395,28 @@ def training_logs():
 # ============================================================================
 
 
-@app.post("/start-replay")
-def start_replay(request: ReplayRequest):
-    """Start a replay session"""
-    return handle_start_replay(request)
+@app.post("/replay/start")
+def replay_start(request: StartReplayRequest):
+    """Start streaming an episode's actions over /ws/joint-data."""
+    return handle_start_replay(request, manager)
 
 
-@app.post("/stop-replay")
-def stop_replay():
-    """Stop the current replay session"""
+@app.post("/replay/control")
+def replay_control(request: ReplayControlRequest):
+    """Mutate the active replay session (pause/resume/seek/set_speed)."""
+    return handle_replay_control(request)
+
+
+@app.post("/replay/stop")
+def replay_stop():
+    """Stop the active replay session."""
     return handle_stop_replay()
 
 
-@app.get("/replay-status")
+@app.get("/replay/status")
 def replay_status():
-    """Get the current replay status"""
+    """Get the current replay session state."""
     return handle_replay_status()
-
-
-@app.get("/replay-logs")
-def replay_logs():
-    """Get recent replay logs"""
-    return handle_replay_logs()
 
 
 # ============================================================================
