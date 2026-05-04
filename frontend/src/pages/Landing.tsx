@@ -35,6 +35,8 @@ const Landing = () => {
   const [datasetName, setDatasetName] = useState("");
   const [singleTask, setSingleTask] = useState("");
   const [numEpisodes, setNumEpisodes] = useState(5);
+  const [episodeTimeS, setEpisodeTimeS] = useState(60);
+  const [resetTimeS, setResetTimeS] = useState(15);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
 
   const releaseStreamsRef = useRef<(() => void) | null>(null);
@@ -162,8 +164,8 @@ const Landing = () => {
       dataset_repo_id: datasetRepoId,
       single_task: singleTask,
       num_episodes: numEpisodes,
-      episode_time_s: 60,
-      reset_time_s: 15,
+      episode_time_s: episodeTimeS,
+      reset_time_s: resetTimeS,
       fps: 30,
       video: true,
       push_to_hub: false,
@@ -241,6 +243,10 @@ const Landing = () => {
         setSingleTask={setSingleTask}
         numEpisodes={numEpisodes}
         setNumEpisodes={setNumEpisodes}
+        episodeTimeS={episodeTimeS}
+        setEpisodeTimeS={setEpisodeTimeS}
+        resetTimeS={resetTimeS}
+        setResetTimeS={setResetTimeS}
         cameras={cameras}
         setCameras={setCameras}
         onStart={handleStartRecording}

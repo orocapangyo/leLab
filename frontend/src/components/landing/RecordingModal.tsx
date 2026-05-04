@@ -27,6 +27,10 @@ interface RecordingModalProps {
   setSingleTask: (value: string) => void;
   numEpisodes: number;
   setNumEpisodes: (value: number) => void;
+  episodeTimeS: number;
+  setEpisodeTimeS: (value: number) => void;
+  resetTimeS: number;
+  setResetTimeS: (value: number) => void;
   cameras: CameraConfig[];
   setCameras: (cameras: CameraConfig[]) => void;
   onStart: () => void;
@@ -43,6 +47,10 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   setSingleTask,
   numEpisodes,
   setNumEpisodes,
+  episodeTimeS,
+  setEpisodeTimeS,
+  resetTimeS,
+  setResetTimeS,
   cameras,
   setCameras,
   onStart,
@@ -165,6 +173,44 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                     onChange={(e) => setNumEpisodes(parseInt(e.target.value))}
                     className="bg-gray-800 border-gray-700 text-white"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="episodeTimeS"
+                      className="text-sm font-medium text-gray-300"
+                    >
+                      Episode duration (seconds)
+                    </Label>
+                    <Input
+                      id="episodeTimeS"
+                      type="number"
+                      min="1"
+                      value={episodeTimeS}
+                      onChange={(e) =>
+                        setEpisodeTimeS(parseInt(e.target.value) || 1)
+                      }
+                      className="bg-gray-800 border-gray-700 text-white"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="resetTimeS"
+                      className="text-sm font-medium text-gray-300"
+                    >
+                      Reset duration (seconds)
+                    </Label>
+                    <Input
+                      id="resetTimeS"
+                      type="number"
+                      min="1"
+                      value={resetTimeS}
+                      onChange={(e) =>
+                        setResetTimeS(parseInt(e.target.value) || 1)
+                      }
+                      className="bg-gray-800 border-gray-700 text-white"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
