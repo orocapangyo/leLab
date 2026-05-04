@@ -204,7 +204,6 @@ const Recording = () => {
     }
   };
 
-  // Equivalent to pressing RIGHT ARROW key in original record.py
   const handleExitEarly = async () => {
     if (!backendStatus?.available_controls.exit_early) return;
 
@@ -260,7 +259,6 @@ const Recording = () => {
     }
   };
 
-  // Equivalent to pressing LEFT ARROW key in original record.py
   const handleRerecordEpisode = async () => {
     if (!backendStatus?.available_controls.rerecord_episode) return;
 
@@ -294,7 +292,6 @@ const Recording = () => {
     }
   };
 
-  // Equivalent to pressing ESC key in original record.py
   const handleStopRecording = async () => {
     try {
       const response = await fetchWithHeaders(`${baseUrl}/stop-recording`, {
@@ -363,16 +360,6 @@ const Recording = () => {
       : recordingConfig.reset_time_s);
   const sessionElapsedTime = backendStatus.session_elapsed_seconds || 0;
 
-  const getPhaseTitle = () => {
-    // 🎯 IMMEDIATE FEEDBACK: Show transition titles
-    if (transitioningToReset) return "Transitioning to Reset";
-    if (transitioningToNext) return "Moving to Next Episode";
-
-    if (currentPhase === "recording") return "Episode Recording Time";
-    if (currentPhase === "resetting") return "Environment Reset Time";
-    return "Phase Time";
-  };
-
   const getStatusText = () => {
     // 🎯 IMMEDIATE FEEDBACK: Show transition states
     if (transitioningToReset) return "MOVING TO RESET PHASE";
@@ -383,28 +370,6 @@ const Recording = () => {
     if (currentPhase === "resetting") return "RESET THE ENVIRONMENT";
     if (currentPhase === "preparing") return "PREPARING SESSION";
     return "SESSION COMPLETE";
-  };
-
-  const getStatusColor = () => {
-    // 🎯 IMMEDIATE FEEDBACK: Show transition state colors
-    if (transitioningToReset) return "text-blue-400"; // Blue for transition
-    if (transitioningToNext) return "text-blue-400"; // Blue for transition
-
-    if (currentPhase === "recording") return "text-red-400";
-    if (currentPhase === "resetting") return "text-orange-400";
-    if (currentPhase === "preparing") return "text-yellow-400";
-    return "text-gray-400";
-  };
-
-  const getDotColor = () => {
-    // 🎯 IMMEDIATE FEEDBACK: Show transition state dots with animation
-    if (transitioningToReset) return "bg-blue-500 animate-pulse"; // Blue pulsing for transition
-    if (transitioningToNext) return "bg-blue-500 animate-pulse"; // Blue pulsing for transition
-
-    if (currentPhase === "recording") return "bg-red-500 animate-pulse";
-    if (currentPhase === "resetting") return "bg-orange-500 animate-pulse";
-    if (currentPhase === "preparing") return "bg-yellow-500";
-    return "bg-gray-500";
   };
 
   const phaseColor =
