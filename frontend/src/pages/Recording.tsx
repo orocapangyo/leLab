@@ -34,6 +34,8 @@ interface RecordingConfig {
   resume: boolean;
 }
 
+type Phase = "preparing" | "recording" | "resetting" | "completed";
+
 interface BackendStatus {
   recording_active: boolean;
   current_phase: string;
@@ -67,9 +69,7 @@ const Recording = () => {
   );
   const [recordingSessionStarted, setRecordingSessionStarted] = useState(false);
 
-  // Local UI state for immediate user feedback
-  const [transitioningToReset, setTransitioningToReset] = useState(false);
-  const [transitioningToNext, setTransitioningToNext] = useState(false);
+  const [optimisticPhase, setOptimisticPhase] = useState<Phase | null>(null);
 
   // Redirect if no config provided
   useEffect(() => {
@@ -102,23 +102,10 @@ const Recording = () => {
           );
           if (response.ok) {
             const status = await response.json();
-            console.log(
-              `📊 Backend Status: ${status.current_phase} | Transition States: reset=${transitioningToReset}, next=${transitioningToNext}`
-            );
             setBackendStatus(status);
 
-            // 🎯 CLEAR TRANSITION STATES: Only clear when backend actually reaches the expected phase
-            if (status.current_phase === "resetting" && transitioningToReset) {
-              console.log(
-                "✅ Clearing transitioningToReset - backend reached resetting phase"
-              );
-              setTransitioningToReset(false);
-            }
-            if (status.current_phase === "recording" && transitioningToNext) {
-              console.log(
-                "✅ Clearing transitioningToNext - backend reached recording phase"
-              );
-              setTransitioningToNext(false);
+            if (optimisticPhase && status.current_phase === optimisticPhase) {
+              setOptimisticPhase(null);
             }
 
             // If backend recording stopped and session ended, navigate to upload
@@ -159,8 +146,7 @@ const Recording = () => {
     recordingConfig,
     navigate,
     toast,
-    transitioningToReset,
-    transitioningToNext,
+    optimisticPhase,
   ]);
 
   const formatTime = (seconds: number): string => {
@@ -207,40 +193,23 @@ const Recording = () => {
   const handleExitEarly = async () => {
     if (!backendStatus?.available_controls.exit_early) return;
 
-    // 🎯 IMMEDIATE UI FEEDBACK: Show transition state before backend response
-    const currentPhase = backendStatus.current_phase;
-    if (currentPhase === "recording") {
-      console.log("🎯 Setting transitioningToReset = true");
-      setTransitioningToReset(true);
-      toast({
-        title: "Ending Episode Recording",
-        description: `Moving to reset phase for episode ${backendStatus.current_episode}...`,
-      });
-    } else if (currentPhase === "resetting") {
-      console.log("🎯 Setting transitioningToNext = true");
-      setTransitioningToNext(true);
-      toast({
-        title: "Reset Complete",
-        description: `Moving to next episode...`,
-      });
-    }
+    const realPhase = backendStatus.current_phase as Phase;
+    const next: Phase | null =
+      realPhase === "recording" ? "resetting" :
+      realPhase === "resetting" ? "recording" : null;
+
+    if (!next) return;
+
+    setOptimisticPhase(next);
 
     try {
       const response = await fetchWithHeaders(
         `${baseUrl}/recording-exit-early`,
-        {
-          method: "POST",
-        }
+        { method: "POST" }
       );
-      const data = await response.json();
-
-      if (response.ok) {
-        // ✅ SUCCESS: Don't clear transition states here - let them persist until backend phase changes
-        // The transition states will be cleared when the backend status actually updates to the new phase
-      } else {
-        // Clear transition states on error
-        setTransitioningToReset(false);
-        setTransitioningToNext(false);
+      if (!response.ok) {
+        const data = await response.json();
+        setOptimisticPhase(null);
         toast({
           title: "Error",
           description: data.message,
@@ -248,9 +217,7 @@ const Recording = () => {
         });
       }
     } catch (error) {
-      // Clear transition states on error
-      setTransitioningToReset(false);
-      setTransitioningToNext(false);
+      setOptimisticPhase(null);
       toast({
         title: "Connection Error",
         description: "Could not connect to the backend server.",
@@ -348,26 +315,27 @@ const Recording = () => {
     );
   }
 
-  const currentPhase = backendStatus.current_phase;
+  const realPhase = backendStatus.current_phase as Phase;
+  const currentPhase: Phase = optimisticPhase ?? realPhase;
   const currentEpisode = backendStatus.current_episode || 1;
   const totalEpisodes =
     backendStatus.total_episodes || recordingConfig.num_episodes;
-  const phaseElapsedTime = backendStatus.phase_elapsed_seconds || 0;
+
+  const phaseElapsedTime = optimisticPhase
+    ? 0
+    : backendStatus.phase_elapsed_seconds || 0;
   const phaseTimeLimit =
-    backendStatus.phase_time_limit_s ||
-    (currentPhase === "recording"
+    currentPhase === "recording"
       ? recordingConfig.episode_time_s
-      : recordingConfig.reset_time_s);
+      : currentPhase === "resetting"
+      ? recordingConfig.reset_time_s
+      : backendStatus.phase_time_limit_s || 0;
+
   const sessionElapsedTime = backendStatus.session_elapsed_seconds || 0;
 
   const getStatusText = () => {
-    // 🎯 IMMEDIATE FEEDBACK: Show transition states
-    if (transitioningToReset) return "MOVING TO RESET PHASE";
-    if (transitioningToNext) return "MOVING TO NEXT EPISODE";
-
-    if (currentPhase === "recording")
-      return `RECORDING EPISODE ${currentEpisode}`;
-    if (currentPhase === "resetting") return "RESET THE ENVIRONMENT";
+    if (currentPhase === "recording") return `RECORDING EPISODE ${currentEpisode}`;
+    if (currentPhase === "resetting") return "RESET — GET READY";
     if (currentPhase === "preparing") return "PREPARING SESSION";
     return "SESSION COMPLETE";
   };
@@ -469,8 +437,7 @@ const Recording = () => {
             onClick={handleExitEarly}
             disabled={
               !backendStatus.available_controls.exit_early ||
-              transitioningToReset ||
-              transitioningToNext ||
+              optimisticPhase !== null ||
               currentPhase === "completed"
             }
             className={`w-full text-white font-semibold py-6 text-lg disabled:opacity-50 ${phaseColor.button}`}
