@@ -153,9 +153,8 @@ const Recording = () => {
 
             const elapsed = status.phase_elapsed_seconds || 0;
             const limit = status.phase_time_limit_s || 0;
-            const inFinalThreeSeconds =
-              limit > 3 && elapsed >= limit - 3 && elapsed < limit;
-            const ep = status.current_episode || null;
+            const inFinalThreeSeconds = limit > 3 && elapsed >= limit - 3;
+            const ep = status.current_episode ?? null;
             const warned = warningFiredForPhaseRef.current;
             if (
               inFinalThreeSeconds &&
