@@ -487,7 +487,7 @@ const Calibration = () => {
                     className="w-full rounded-full py-6 text-lg"
                   >
                     <Square className="w-5 h-5 mr-2" />
-                    Stop Calibration
+                    Cancel Calibration
                   </Button>
                 )}
               </div>
@@ -600,29 +600,49 @@ const Calibration = () => {
                 </Alert>
               )}
 
-              {calibrationStatus.status === "recording" && (
-                <div className="space-y-3">
-                  <Alert className="bg-purple-900/50 border-purple-700 text-purple-200">
-                    <Activity className="h-4 w-4" />
-                    <AlertDescription>
-                      <strong>Important:</strong> Move EACH joint from its
-                      minimum to maximum position to record full range. Watch
-                      the min/max values change in the live data above. Ensure
-                      all joints have significant range before finishing.
-                    </AlertDescription>
-                  </Alert>
-                  <div className="flex justify-center">
-                    <Button
-                      onClick={handleCompleteStep}
-                      disabled={!calibrationStatus.calibration_active}
-                      className="bg-green-600 hover:bg-green-700 px-8 py-3 rounded-full"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Calibration End
-                    </Button>
+              {calibrationStatus.status === "recording" && (() => {
+                const ranges = calibrationStatus.recorded_ranges ?? {};
+                const motors = Object.entries(ranges);
+                const allComplete =
+                  motors.length > 0 &&
+                  motors.every(([motor, range]) =>
+                    isMotorRangeComplete(
+                      calibrationStatus.device_type,
+                      motor,
+                      range.max - range.min
+                    )
+                  );
+                return (
+                  <div className="space-y-3">
+                    <Alert className="bg-purple-900/50 border-purple-700 text-purple-200">
+                      <Activity className="h-4 w-4" />
+                      <AlertDescription>
+                        <strong>Important:</strong> Move EACH joint through its
+                        full range. A check appears next to each joint once its
+                        range is wide enough.
+                      </AlertDescription>
+                    </Alert>
+                    <div className="flex justify-center">
+                      <Button
+                        onClick={handleCompleteStep}
+                        disabled={!calibrationStatus.calibration_active}
+                        className={`px-8 py-3 rounded-full transition-colors ${
+                          allComplete
+                            ? "bg-green-600 hover:bg-green-700"
+                            : "bg-orange-500 hover:bg-orange-600"
+                        }`}
+                      >
+                        {allComplete ? (
+                          <CheckCircle className="w-4 h-4 mr-2" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 mr-2" />
+                        )}
+                        Save Calibration
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {calibrationStatus.status === "completed" && (
                 <Alert className="bg-green-900/50 border-green-700 text-green-200">
