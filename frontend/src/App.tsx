@@ -20,7 +20,6 @@ import EditDataset from "@/pages/EditDataset";
 import Upload from "@/pages/Upload";
 
 import NotFound from "@/pages/NotFound";
-import "./App.css";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { ApiProvider } from "./contexts/ApiContext";
 import { HfAuthProvider } from "./contexts/HfAuthContext";
