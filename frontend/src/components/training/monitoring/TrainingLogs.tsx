@@ -31,13 +31,14 @@ const TrainingLogs: React.FC<TrainingLogsProps> = ({ logs, logContainerRef }) =>
             </div>
           ) : (
             logs.map((log, index) => (
-              <div key={index} className="flex items-start mb-1">
-                <span className="text-slate-500 mr-4 select-none">
+              <div
+                key={index}
+                className="text-slate-300 break-words whitespace-pre-wrap"
+              >
+                <span className="text-slate-500 mr-2 select-none">
                   {new Date(log.timestamp * 1000).toLocaleTimeString()}
                 </span>
-                <span className="flex-1 text-slate-300 break-words whitespace-pre-wrap">
-                  {log.message}
-                </span>
+                {log.message}
               </div>
             ))
           )}
