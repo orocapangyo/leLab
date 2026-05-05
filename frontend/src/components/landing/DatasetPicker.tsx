@@ -80,7 +80,7 @@ const DatasetPicker: React.FC<DatasetPickerProps> = ({
           <CommandInput
             placeholder="Search, type a new name, or org/name…"
             value={query}
-            onValueChange={setQuery}
+            onValueChange={(v) => setQuery(v.replace(/[^A-Za-z0-9._\-/]/g, "_"))}
             onKeyDown={(e) => {
               if (e.key !== "Enter") return;
               if (canCreate) {
