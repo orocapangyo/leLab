@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
-from .config import setup_calibration_files
+from .config import setup_follower_calibration_file
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +78,16 @@ def _resolve_policy_path(policy_ref: str) -> str:
 
 def _format_cameras_arg(cameras: Dict[str, Dict[str, Any]]) -> str:
     """Convert {name: {type, camera_index, width, height, fps}} into
-    lerobot's CLI dict syntax."""
+    lerobot's CLI dict syntax. The frontend key `camera_index` is
+    remapped to lerobot's `index_or_path`."""
     parts = []
     for name, cfg in cameras.items():
-        body = ", ".join(f"{k}: {v}" for k, v in cfg.items() if v is not None)
+        remapped = {
+            ("index_or_path" if k == "camera_index" else k): v
+            for k, v in cfg.items()
+            if v is not None
+        }
+        body = ", ".join(f"{k}: {v}" for k, v in remapped.items())
         parts.append(f"{name}: {{{body}}}")
     return "{" + ", ".join(parts) + "}"
 
@@ -106,10 +112,7 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
                 "message": "Inference is already active. Stop it first."}
 
     try:
-        # Recording has a single-arg setup but follower-only is fine — we
-        # pass the same name twice; setup_calibration_files keys on
-        # follower_config for the follower side, which is all we need.
-        setup_calibration_files(request.follower_config, request.follower_config)
+        setup_follower_calibration_file(request.follower_config)
         policy_path = _resolve_policy_path(request.policy_ref)
 
         cmd = [
