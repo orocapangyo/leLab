@@ -457,7 +457,12 @@ _CKPT_PATH_RE = re.compile(r"^checkpoints/(\d+)/pretrained_model/config\.json$")
 
 
 def _list_hub_checkpoints(api, repo_id: str) -> List[JobCheckpoint]:
-    """List checkpoints by introspecting the model repo file tree."""
+    """List checkpoints by introspecting the model repo file tree.
+
+    The ref preserves the original directory name (zero-padded by
+    lerobot — e.g. 000050) so downstream consumers can rebuild the Hub
+    path verbatim. JobCheckpoint.step is the int form for sorting and
+    UI display."""
     try:
         files = api.list_repo_files(repo_id, repo_type="model")
     except Exception:
@@ -469,11 +474,12 @@ def _list_hub_checkpoints(api, repo_id: str) -> List[JobCheckpoint]:
         m = _CKPT_PATH_RE.match(path)
         if not m:
             continue
-        step = int(m.group(1))
+        step_dir = m.group(1)
+        step = int(step_dir)
         seen[step] = JobCheckpoint(
             step=step,
             source="hub",
-            ref=f"{repo_id}@checkpoints/{step}",
+            ref=f"{repo_id}@checkpoints/{step_dir}",
         )
     out = list(seen.values())
     out.sort(key=lambda c: c.step)
@@ -483,27 +489,29 @@ def _list_hub_checkpoints(api, repo_id: str) -> List[JobCheckpoint]:
 _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
 
 
-def _read_checkpoint_config(record: "JobRecord", step: int) -> Dict[str, object]:
+_HUB_CKPT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
+
+
+def _read_checkpoint_config(record: "JobRecord", ckpt: "JobCheckpoint") -> Dict[str, object]:
     """Load the pretrained_model/config.json for one checkpoint.
 
-    Local: read straight from <output_dir>/checkpoints/<padded_step>/.
-    Cloud: download just the single config.json via hf_hub_download (a few KB,
-    no full snapshot needed)."""
+    Local refs carry the absolute directory path; cloud refs carry the
+    Hub-side `<repo>@checkpoints/<step_dir>` where `<step_dir>` keeps
+    lerobot's zero-padded form (e.g. 000050) so we can reconstruct the
+    exact path-in-repo without a second list_repo_files call."""
     if record.runner == "local":
-        for ckpt in _list_local_checkpoints(record.output_dir):
-            if ckpt.step == step:
-                config_path = Path(ckpt.ref) / "config.json"
-                with open(config_path) as f:
-                    return json.load(f)
-        raise FileNotFoundError(
-            f"No checkpoint at step {step} for job {record.id}"
-        )
-    if not record.hf_repo_id:
-        raise ValueError(f"Cloud job {record.id} has no hf_repo_id")
+        config_path = Path(ckpt.ref) / "config.json"
+        with open(config_path) as f:
+            return json.load(f)
+    m = _HUB_CKPT_REF_RE.match(ckpt.ref)
+    if not m:
+        raise ValueError(f"Bad cloud ref: {ckpt.ref!r}")
+    repo_id = m.group("repo")
+    step_dir = m.group("step_dir")
     from huggingface_hub import hf_hub_download
     local_path = hf_hub_download(
-        repo_id=record.hf_repo_id,
-        filename=f"checkpoints/{step}/pretrained_model/config.json",
+        repo_id=repo_id,
+        filename=f"checkpoints/{step_dir}/pretrained_model/config.json",
         repo_type="model",
     )
     with open(local_path) as f:
@@ -745,7 +753,13 @@ class JobRegistry:
             record = self._records.get(job_id)
         if record is None:
             raise JobNotFoundError(job_id)
-        cfg = _read_checkpoint_config(record, step)
+        ckpts = self.list_checkpoints(job_id)
+        match = next((c for c in ckpts if c.step == step), None)
+        if match is None:
+            raise FileNotFoundError(
+                f"No checkpoint at step {step} for job {record.id}"
+            )
+        cfg = _read_checkpoint_config(record, match)
         policy_type = cfg.get("type")
         image_features: Dict[str, Dict[str, int]] = {}
         for full_name, feat in (cfg.get("input_features") or {}).items():

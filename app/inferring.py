@@ -37,7 +37,7 @@ inference_active: bool = False
 _inference_proc: Optional[subprocess.Popen] = None
 _inference_started_at: Optional[float] = None
 _inference_meta: Dict[str, Any] = {}
-_HUB_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step>\d+)$")
+_HUB_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
 
 
 def _detect_device() -> str:
@@ -57,22 +57,23 @@ def _resolve_policy_path(policy_ref: str) -> str:
     """Turn a checkpoints API ref into a local path that lerobot accepts.
 
     Local refs are already absolute paths to a pretrained_model dir.
-    Hub refs look like 'user/repo@checkpoints/<step>' and need a
-    snapshot_download of just that subdir.
-    """
+    Hub refs look like 'user/repo@checkpoints/<step_dir>' where
+    <step_dir> is lerobot's zero-padded directory name (e.g. 000050) — we
+    forward it verbatim into snapshot_download's allow_patterns and the
+    resolved local path."""
     if Path(policy_ref).is_dir():
         return policy_ref
     m = _HUB_REF_RE.match(policy_ref)
     if not m:
         raise ValueError(f"Unrecognised policy ref: {policy_ref!r}")
     from huggingface_hub import snapshot_download
-    repo_id, step = m.group("repo"), m.group("step")
+    repo_id, step_dir = m.group("repo"), m.group("step_dir")
     local_root = snapshot_download(
         repo_id=repo_id,
         repo_type="model",
-        allow_patterns=[f"checkpoints/{step}/pretrained_model/*"],
+        allow_patterns=[f"checkpoints/{step_dir}/pretrained_model/*"],
     )
-    return str(Path(local_root) / "checkpoints" / step / "pretrained_model")
+    return str(Path(local_root) / "checkpoints" / step_dir / "pretrained_model")
 
 
 def _format_cameras_arg(cameras: Dict[str, Dict[str, Any]]) -> str:
