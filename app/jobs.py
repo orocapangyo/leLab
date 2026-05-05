@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 JobState = Literal["running", "done", "failed", "interrupted"]
 
 
+class JobTarget(BaseModel):
+    """Where a job should run. `local` ⇒ LocalJobRunner. `hf_cloud` requires
+    a non-empty `flavor` from HfApi.list_jobs_hardware()."""
+    runner: Literal["local", "hf_cloud"] = "local"
+    flavor: Optional[str] = None
+
+
 class TrainingMetrics(BaseModel):
     current_step: int = 0
     total_steps: int = 0
@@ -447,7 +454,7 @@ class JobRegistry:
 
         self._lock = threading.Lock()
         self._records: Dict[str, JobRecord] = {}
-        self._runners: Dict[str, LocalJobRunner] = {}
+        self._runners: Dict[str, JobRunner] = {}
         self._last_persist_at: Dict[str, float] = {}
 
         self._stop_watchdog = threading.Event()
@@ -471,7 +478,13 @@ class JobRegistry:
             raise JobNotFoundError(job_id)
         return record
 
-    def start(self, config: TrainingRequest) -> JobRecord:
+    def start(self, config: TrainingRequest, target: Optional[JobTarget] = None) -> JobRecord:
+        from .runners.hf_cloud import HfCloudJobRunner  # lazy import to avoid circular import
+
+        target = target or JobTarget()
+        if target.runner == "hf_cloud" and not target.flavor:
+            raise ValueError("flavor is required when runner is hf_cloud")
+
         with self._lock:
             for r in self._records.values():
                 if r.state == "running":
@@ -479,10 +492,6 @@ class JobRegistry:
 
             job_id = _generate_job_id(config.policy_type, config.dataset_repo_id)
             job_dir = _job_dir(self._output_root, job_id)
-            # LeRobot refuses to start when --output_dir already exists. Our
-            # registry needs to create the job directory ahead of time to write
-            # job.json into it, so point LeRobot at a subdirectory that won't
-            # exist until it creates it.
             lerobot_output_dir = str(job_dir / "run")
             name = f"{config.policy_type.upper()} · {config.dataset_repo_id}"
             record = JobRecord(
@@ -492,32 +501,40 @@ class JobRegistry:
                 config=config,
                 output_dir=lerobot_output_dir,
                 started_at=time.time(),
+                runner=target.runner,
+                hf_flavor=target.flavor,
             )
 
             job_dir.mkdir(parents=True, exist_ok=True)
             self._records[job_id] = record
             self._persist(record, force=True)
 
-            runner = LocalJobRunner(
-                record.metrics,
-                log_file_path=_job_log_path(self._output_root, job_id),
-            )
+            log_path = _job_log_path(self._output_root, job_id)
+            if target.runner == "local":
+                runner = LocalJobRunner(record.metrics, log_file_path=log_path)
+            else:
+                runner = HfCloudJobRunner(record.metrics, log_path, target.flavor)
+
             try:
                 runner.start(job_id, config, lerobot_output_dir)
             except Exception as exc:
-                logger.exception("Failed to start subprocess for job %s", job_id)
+                logger.exception("Failed to start runner for job %s", job_id)
                 record.state = "failed"
                 record.ended_at = time.time()
-                record.error_message = f"Failed to spawn subprocess: {exc}"
+                record.error_message = f"Failed to start runner: {exc}"
                 self._persist(record, force=True)
                 raise
 
-            # Persist the pid so a fresh registry (after a uvicorn reload)
-            # can re-attach via TailingJobRunner instead of marking the job
-            # as interrupted.
-            record.process_pid = runner.pid()
-            self._persist(record, force=True)
+            # Capture runner-specific identifiers.
+            if target.runner == "local":
+                record.process_pid = runner.pid()
+            else:
+                record.hf_job_id = runner.hf_job_id()
+                # config was mutated by HfCloudJobRunner.start to set
+                # policy_repo_id; mirror it onto the record for the UI.
+                record.hf_repo_id = config.policy_repo_id
 
+            self._persist(record, force=True)
             self._runners[job_id] = runner
             return record
 
@@ -688,6 +705,7 @@ job_registry = JobRegistry(_DEFAULT_OUTPUT_ROOT)
 
 __all__ = [
     "JobState",
+    "JobTarget",
     "TrainingMetrics",
     "LogLine",
     "JobRecord",
