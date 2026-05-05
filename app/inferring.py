@@ -111,7 +111,11 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
                 "message": "Inference is already active. Stop it first."}
 
     try:
-        setup_follower_calibration_file(request.follower_config)
+        # `setup_follower_calibration_file` returns the basename without the
+        # .json extension. We need that stripped form for `--robot.id`,
+        # because lerobot appends `.json` itself when constructing
+        # `calibration_dir / f"{id}.json"`.
+        follower_id = setup_follower_calibration_file(request.follower_config)
         policy_path = _resolve_policy_path(request.policy_ref)
 
         cmd = [
@@ -121,7 +125,7 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
             f"--policy.device={_detect_device()}",
             "--robot.type=so101_follower",
             f"--robot.port={request.follower_port}",
-            f"--robot.id={request.follower_config}",
+            f"--robot.id={follower_id}",
             f"--task={request.task}",
             f"--duration={request.duration_s}",
         ]
