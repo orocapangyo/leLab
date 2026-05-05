@@ -1,16 +1,20 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import LandingTopBar from "@/components/landing/LandingTopBar";
 import RobotConfigManager from "@/components/landing/RobotConfigManager";
 import ActionList from "@/components/landing/ActionList";
 import RecordingModal from "@/components/landing/RecordingModal";
+import DatasetPicker from "@/components/landing/DatasetPicker";
 import JobsSection from "@/components/jobs/JobsSection";
 
 import { Action } from "@/components/landing/types";
 import UsageInstructionsModal from "@/components/landing/UsageInstructionsModal";
 import { useHfAuth } from "@/contexts/HfAuthContext";
 import { useRobots } from "@/hooks/useRobots";
+import { useDatasets } from "@/hooks/useDatasets";
 import { CameraConfig } from "@/components/recording/CameraConfiguration";
 import { isHostedSpace } from "@/lib/isHostedSpace";
 
@@ -29,6 +33,8 @@ const Landing = () => {
     createRobot,
     deleteRobot,
   } = useRobots();
+
+  const { datasets, loading: datasetsLoading } = useDatasets();
 
   // Recording modal state
   const [showRecordingModal, setShowRecordingModal] = useState(false);
@@ -66,9 +72,7 @@ const Landing = () => {
     };
   }, []);
 
-  const handleRecordingClick = () => {
-    // Seed the recording's camera list from the selected robot's attached cameras.
-    // The user can add more in the modal.
+  const openRecordingModal = () => {
     setCameras(selectedRecord ? [...(selectedRecord.cameras ?? [])] : []);
     setShowRecordingModal(true);
   };
@@ -82,8 +86,22 @@ const Landing = () => {
   };
 
   const handleTrainingClick = () => navigate("/training");
-  const handleReplayDatasetClick = () => navigate("/replay-dataset");
   const handleInferenceClick = () => navigate("/inference");
+
+  const openDatasetInViewer = (repoId: string) => {
+    const found = datasets.find((d) => d.repo_id === repoId);
+    const needsAuth = !found || found.private;
+    const spacePath = `/spaces/lerobot/visualize_dataset?path=${encodeURIComponent(`/${repoId}`)}`;
+    const target = needsAuth
+      ? `https://huggingface.co/login?next=${encodeURIComponent(spacePath)}`
+      : `https://huggingface.co${spacePath}`;
+    window.open(target, "_blank", "noopener,noreferrer");
+  };
+
+  const handleCreateDataset = (name: string) => {
+    setDatasetName(name);
+    openRecordingModal();
+  };
 
   const handleStartRecording = async () => {
     if (!selectedRecord) {
@@ -177,19 +195,30 @@ const Landing = () => {
     navigate("/recording", { state: { recordingConfig } });
   };
 
-  // Calibration and Teleoperation are now per-robot on the tile.
+  const datasetTrigger = (
+    <DatasetPicker
+      datasets={datasets}
+      loading={datasetsLoading}
+      onPickExisting={openDatasetInViewer}
+      onOpenCustom={openDatasetInViewer}
+      onCreateNew={handleCreateDataset}
+    >
+      <Button
+        size="icon"
+        className="bg-purple-500 hover:bg-purple-600 text-white"
+      >
+        <ArrowRight className="w-5 h-5" />
+      </Button>
+    </DatasetPicker>
+  );
+
   const actions: Action[] = [
     {
-      title: "Record Dataset",
-      description: "Record episodes for training data.",
-      handler: handleRecordingClick,
-      color: "bg-red-500 hover:bg-red-600",
-    },
-    {
-      title: "Replay Dataset",
-      description: "Replay and analyze recorded datasets.",
-      handler: handleReplayDatasetClick,
+      title: "Dataset",
+      description: "Pick an existing dataset or create a new one to record.",
+      handler: () => {},
       color: "bg-purple-500 hover:bg-purple-600",
+      trigger: datasetTrigger,
     },
     {
       title: "Training",
