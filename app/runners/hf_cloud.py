@@ -88,6 +88,22 @@ class HfCloudJobRunner:
         )
         self._tail_thread.start()
 
+    def reattach(self, hf_job_id: str) -> None:
+        """Take over an existing HF job after a process restart.
+
+        Skips submission; just opens the log file in append mode and starts
+        the log-tailing thread. The watchdog will finalise based on inspect_job.
+        """
+        if self._hf_job_id is not None:
+            raise RuntimeError("HfCloudJobRunner already started")
+        self._hf_job_id = hf_job_id
+        self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_file = self._log_file_path.open("a", buffering=1)
+        self._tail_thread = threading.Thread(
+            target=self._tail_loop, name=f"hf-job-{hf_job_id}-logs-reattach", daemon=True
+        )
+        self._tail_thread.start()
+
     def _tail_loop(self) -> None:
         """Consume HfApi.fetch_job_logs until it returns. Tee each line to
         the log file and the in-memory queue, and update metrics inline.

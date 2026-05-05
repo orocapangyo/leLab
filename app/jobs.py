@@ -623,22 +623,57 @@ class JobRegistry:
                 logger.warning("Skipping malformed job.json at %s: %s", meta, exc)
                 continue
             if record.state == "running":
-                # Was the subprocess detached and is it still alive? If yes,
-                # re-attach via tailing the persisted log file. The watchdog
-                # will finalise the record when the pid eventually dies.
-                pid = record.process_pid
-                if pid is not None and _pid_alive(pid):
-                    logger.info(
-                        "Re-attaching to detached job %s (pid %d)", record.id, pid
-                    )
-                    runner = TailingJobRunner(
-                        record.metrics,
-                        _job_log_path(self._output_root, record.id),
-                        pid,
-                    )
-                    runner.start_tailing()
-                    self._runners[record.id] = runner
+                if record.runner == "local":
+                    pid = record.process_pid
+                    if pid is not None and _pid_alive(pid):
+                        logger.info(
+                            "Re-attaching to detached local job %s (pid %d)",
+                            record.id, pid,
+                        )
+                        runner = TailingJobRunner(
+                            record.metrics,
+                            _job_log_path(self._output_root, record.id),
+                            pid,
+                        )
+                        runner.start_tailing()
+                        self._runners[record.id] = runner
+                    else:
+                        record.state = "interrupted"
+                        if record.ended_at is None:
+                            record.ended_at = time.time()
+                        self._write_meta(record)
+                elif record.runner == "hf_cloud" and record.hf_job_id and record.hf_flavor:
+                    # Probe HF for the live status before reattaching.
+                    try:
+                        from huggingface_hub import HfApi
+                        info = HfApi().inspect_job(record.hf_job_id)
+                        status = str(getattr(info, "status", "")).upper()
+                    except Exception as exc:
+                        logger.warning(
+                            "inspect_job failed during reattach for %s: %s",
+                            record.id, exc,
+                        )
+                        status = ""
+                    if status in {"QUEUED", "RUNNING"}:
+                        logger.info(
+                            "Re-attaching to HF Cloud job %s (hf_job_id=%s)",
+                            record.id, record.hf_job_id,
+                        )
+                        from .runners.hf_cloud import HfCloudJobRunner
+                        runner = HfCloudJobRunner(
+                            record.metrics,
+                            _job_log_path(self._output_root, record.id),
+                            record.hf_flavor,
+                        )
+                        runner.reattach(record.hf_job_id)
+                        self._runners[record.id] = runner
+                    else:
+                        record.state = "interrupted"
+                        if record.ended_at is None:
+                            record.ended_at = time.time()
+                        self._write_meta(record)
                 else:
+                    # Malformed running record — mark interrupted.
                     record.state = "interrupted"
                     if record.ended_at is None:
                         record.ended_at = time.time()
