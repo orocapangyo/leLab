@@ -6,6 +6,12 @@ export interface JobCheckpoint {
   ref: string;
 }
 
+export interface PolicyConfigSummary {
+  policy_type: string | null;
+  image_features: Record<string, { height: number; width: number }>;
+  requires_task: boolean;
+}
+
 export async function listJobCheckpoints(
   baseUrl: string,
   fetcher: Fetcher,
@@ -17,4 +23,19 @@ export async function listJobCheckpoints(
   }
   const body = await r.json();
   return body.checkpoints;
+}
+
+export async function getCheckpointPolicyConfig(
+  baseUrl: string,
+  fetcher: Fetcher,
+  jobId: string,
+  step: number,
+): Promise<PolicyConfigSummary> {
+  const r = await fetcher(
+    `${baseUrl}/jobs/${jobId}/checkpoints/${step}/policy-config`,
+  );
+  if (!r.ok) {
+    throw new Error(`Load policy config failed: ${r.status}`);
+  }
+  return r.json();
 }
