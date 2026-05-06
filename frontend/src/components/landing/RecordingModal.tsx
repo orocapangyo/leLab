@@ -2,6 +2,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -9,8 +10,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown } from "lucide-react";
 import CameraConfiguration, {
   CameraConfig,
 } from "@/components/recording/CameraConfiguration";
@@ -31,6 +37,8 @@ interface RecordingModalProps {
   setEpisodeTimeS: (value: number) => void;
   resetTimeS: number;
   setResetTimeS: (value: number) => void;
+  streamingEncoding: boolean;
+  setStreamingEncoding: (value: boolean) => void;
   cameras: CameraConfig[];
   setCameras: (cameras: CameraConfig[]) => void;
   onStart: () => void;
@@ -51,6 +59,8 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
   setEpisodeTimeS,
   resetTimeS,
   setResetTimeS,
+  streamingEncoding,
+  setStreamingEncoding,
   cameras,
   setCameras,
   onStart,
@@ -231,6 +241,38 @@ const RecordingModal: React.FC<RecordingModalProps> = ({
                 releaseStreamsRef={releaseStreamsRef}
               />
             </div>
+
+            <Collapsible className="space-y-4 group">
+              <CollapsibleTrigger className="flex items-center justify-between w-full text-lg font-semibold text-white border-b border-gray-700 pb-2">
+                <span>Advanced Parameters</span>
+                <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="streamingEncoding"
+                    checked={streamingEncoding}
+                    onCheckedChange={(value) =>
+                      setStreamingEncoding(value === true)
+                    }
+                    className="mt-0.5 border-gray-500 data-[state=checked]:bg-red-500 data-[state=checked]:border-red-500"
+                  />
+                  <div className="space-y-1">
+                    <Label
+                      htmlFor="streamingEncoding"
+                      className="text-sm font-medium text-gray-200 cursor-pointer"
+                    >
+                      Streaming video encoding
+                    </Label>
+                    <p className="text-xs text-gray-500">
+                      Encodes frames in real time during capture so each
+                      episode saves almost instantly. Uncheck to fall back to
+                      the slower PNG-then-encode flow.
+                    </p>
+                  </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">

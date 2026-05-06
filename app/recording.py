@@ -50,6 +50,7 @@ class RecordingRequest(BaseModel):
     video: bool = True
     push_to_hub: bool = False
     resume: bool = False
+    streaming_encoding: bool = True
     cameras: dict = {}
     test_mode: bool = False  # Skip robot connection for testing
 
@@ -127,6 +128,7 @@ def create_record_config(request: RecordingRequest) -> RecordConfig:
         fps=request.fps,
         video=request.video,
         push_to_hub=request.push_to_hub,
+        streaming_encoding=request.streaming_encoding,
     )
 
     # Create the main record config
@@ -580,15 +582,18 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     dataset_features = {**action_features, **obs_features}
 
     if cfg.resume:
-        dataset = LeRobotDataset(
+        num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+        dataset = LeRobotDataset.resume(
             cfg.dataset.repo_id,
             root=cfg.dataset.root,
+            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+            vcodec=cfg.dataset.vcodec,
+            streaming_encoding=cfg.dataset.streaming_encoding,
+            encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
+            encoder_threads=cfg.dataset.encoder_threads,
+            image_writer_processes=cfg.dataset.num_image_writer_processes if num_cameras > 0 else 0,
+            image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras if num_cameras > 0 else 0,
         )
-        if hasattr(robot, "cameras") and len(robot.cameras) > 0:
-            dataset.start_image_writer(
-                num_processes=cfg.dataset.num_image_writer_processes,
-                num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
-            )
         sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
     else:
         sanity_check_dataset_name(cfg.dataset.repo_id, None)
@@ -601,6 +606,11 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             use_videos=cfg.dataset.video,
             image_writer_processes=cfg.dataset.num_image_writer_processes,
             image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+            vcodec=cfg.dataset.vcodec,
+            streaming_encoding=cfg.dataset.streaming_encoding,
+            encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
+            encoder_threads=cfg.dataset.encoder_threads,
         )
 
     # 🔧 ROBOT CONNECTION: Connect with enhanced error handling for camera conflicts

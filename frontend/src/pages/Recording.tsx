@@ -51,6 +51,7 @@ interface RecordingConfig {
   video: boolean;
   push_to_hub: boolean;
   resume: boolean;
+  streaming_encoding: boolean;
 }
 
 type Phase = "preparing" | "recording" | "resetting" | "completed";

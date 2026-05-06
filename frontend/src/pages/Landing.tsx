@@ -43,6 +43,7 @@ const Landing = () => {
   const [numEpisodes, setNumEpisodes] = useState(5);
   const [episodeTimeS, setEpisodeTimeS] = useState(60);
   const [resetTimeS, setResetTimeS] = useState(15);
+  const [streamingEncoding, setStreamingEncoding] = useState(true);
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
 
   const releaseStreamsRef = useRef<(() => void) | null>(null);
@@ -187,6 +188,7 @@ const Landing = () => {
       video: true,
       push_to_hub: false,
       resume: false,
+      streaming_encoding: streamingEncoding,
       cameras: cameraDict,
     };
 
@@ -274,6 +276,8 @@ const Landing = () => {
         setEpisodeTimeS={setEpisodeTimeS}
         resetTimeS={resetTimeS}
         setResetTimeS={setResetTimeS}
+        streamingEncoding={streamingEncoding}
+        setStreamingEncoding={setStreamingEncoding}
         cameras={cameras}
         setCameras={setCameras}
         onStart={handleStartRecording}
