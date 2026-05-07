@@ -23,7 +23,7 @@ lelab = "scripts.backend:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "scripts*", "frontend"]
+include = ["app*", "lelab*", "scripts*", "frontend"]
 
 [tool.setuptools.package-data]
 frontend = ["dist/**/*"]
