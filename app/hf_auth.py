@@ -1,11 +1,45 @@
 import logging
+from typing import Optional
 
-from huggingface_hub import login as hf_login, whoami
+from huggingface_hub import HfApi, get_token, login as hf_login, whoami
 from huggingface_hub.errors import HfHubHTTPError, LocalTokenNotFoundError
 
 logger = logging.getLogger(__name__)
 
 LOGIN_COMMAND = "hf auth login"
+
+# /whoami-v2 is heavily rate-limited (security). Share one HfApi across the
+# app so its in-process whoami cache (cache=True) actually hits — otherwise
+# polling endpoints like /jobs/hub would burn the rate limit on every tick.
+_WHOAMI_API = HfApi()
+
+
+def cached_whoami() -> Optional[dict]:
+    """Return cached whoami() for the active HF token, or None if no token.
+
+    Swallows transport errors and returns None — callers treat that as
+    "unauthenticated" so the UI degrades gracefully instead of 500ing.
+    """
+    if not get_token():
+        return None
+    try:
+        return _WHOAMI_API.whoami(cache=True)
+    except Exception as exc:
+        logger.info("whoami failed: %s", exc)
+        return None
+
+
+def shared_hf_api() -> HfApi:
+    """The shared HfApi used for whoami caching. Reuse it for non-whoami
+    calls in the same handler so they share connection pooling, but it's
+    the whoami cache that matters."""
+    return _WHOAMI_API
+
+
+def invalidate_whoami_cache() -> None:
+    """Drop the cached whoami() result. Call after a token rotation so the
+    next caller re-validates against the Hub."""
+    _WHOAMI_API._whoami_cache.clear()
 
 
 def handle_hf_auth_status() -> dict:
@@ -42,6 +76,9 @@ def handle_hf_login(token: str) -> dict:
     except HfHubHTTPError as exc:
         raise ValueError(f"Invalid token: {exc}") from exc
     hf_login(token=token, add_to_git_credential=False)
+    # The cached whoami was keyed by the previous token (if any); drop it so
+    # the next caller validates against the new one.
+    invalidate_whoami_cache()
     return {
         "authenticated": True,
         "username": info["name"],

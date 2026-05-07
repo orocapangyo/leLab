@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from pydantic import BaseModel
 from . import config
-from huggingface_hub import HfApi, get_token
+from huggingface_hub import HfApi
 
 # Import our custom recording functionality
 from .recording import (
@@ -68,7 +68,7 @@ from .system import (
     handle_install_wandb_extra_status,
 )
 
-from .hf_auth import handle_hf_auth_status, handle_hf_login
+from .hf_auth import cached_whoami, handle_hf_auth_status, handle_hf_login
 from . import dataset_browser
 
 
@@ -465,24 +465,17 @@ def list_hub_jobs():
     Declared before `/jobs/{job_id}` so FastAPI's first-match routing doesn't
     treat "hub" as a job id.
     """
-    token = get_token()
-    if not token:
+    info = cached_whoami()
+    if info is None:
         return {"authenticated": False, "jobs": [], "models": []}
     api = HfApi()
 
-    try:
-        info = api.whoami()
-    except Exception as exc:
-        logger.warning("whoami failed: %s", exc)
-        return {"authenticated": True, "jobs": [], "models": []}
-
     authors: list[str] = []
-    if isinstance(info, dict):
-        if info.get("name"):
-            authors.append(info["name"])
-        for o in info.get("orgs", []) or []:
-            if isinstance(o, dict) and o.get("name"):
-                authors.append(o["name"])
+    if info.get("name"):
+        authors.append(info["name"])
+    for o in info.get("orgs", []) or []:
+        if isinstance(o, dict) and o.get("name"):
+            authors.append(o["name"])
 
     try:
         jobs = api.list_jobs()
@@ -610,24 +603,15 @@ def delete_job(job_id: str):
 def get_runners_hardware():
     """Return HF Jobs flavor catalog + auth state for the TargetCard.
 
-    The flavors list is cached in-process for 5 minutes; whoami is fetched
-    fresh each call (cheap; resolves the active HF token).
+    Both the flavors list and the whoami result are cached in-process to
+    keep this endpoint cheap (it can be re-fetched whenever auth state
+    changes). The whoami cache is invalidated on login.
     """
-    token = get_token()
-    api = HfApi()
-    authenticated = False
-    username: Optional[str] = None
-    if token:
-        try:
-            who = api.whoami()
-            if isinstance(who, dict) and who.get("name"):
-                authenticated = True
-                username = who["name"]
-        except Exception as exc:
-            logger.info("whoami failed: %s", exc)
-
-    if not authenticated:
+    info = cached_whoami()
+    if info is None or not info.get("name"):
         return {"authenticated": False, "username": None, "flavors": []}
+    username: str = info["name"]
+    api = HfApi()
 
     now = time.time()
     if (
