@@ -1,167 +1,81 @@
-# LeLab - Web Interface for LeRobot
+<h1 align="center">🦾 LeLab</h1>
 
-A modern web-based interface for controlling and monitoring robots using the [LeRobot](https://github.com/huggingface/lerobot) framework. This application provides an intuitive dashboard for robot teleoperation, data recording, and calibration management.
+<p align="center">
+  <b>The official graphical interface for <a href="https://github.com/huggingface/lerobot">LeRobot</a>.</b>
+</p>
 
-## 🤖 About
+<div align="center">
 
-LeLab bridges the gap between LeRobot's powerful robotics capabilities and user-friendly web interfaces. It offers:
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/huggingface/leLab/blob/main/LICENSE)
+[![HF Space](https://img.shields.io/badge/🤗-Open%20in%20Spaces-yellow)](https://huggingface.co/spaces/lerobot/LeLab)
+[![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/q8Dzzpym3f)
 
-- **Real-time robot control** through an intuitive web dashboard
-- **Dataset recording** for training machine learning models
-- **Live teleoperation** with WebSocket-based real-time feedback
-- **Configuration management** for leader/follower robot setups
-- **Joint position monitoring** and visualization
+</div>
 
-## 🏗️ Architecture
+**LeLab** is a web app that puts the full LeRobot workflow — calibrate, teleoperate, record, train, replay — into a single browser UI. Plug in your arm, open the app, and go. No CLI gymnastics, no keyboard prompts.
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   FastAPI        │    │   LeRobot       │
-│   (React/TS)    │◄──►│   Backend        │◄──►│   Framework     │
-│                 │    │                  │    │                 │
-│   • Dashboard   │    │   • REST APIs    │    │   • Robot       │
-│   • Controls    │    │   • WebSockets   │    │     Control     │
-│   • Monitoring  │    │   • Recording    │    │   • Sensors     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+🤗 A web-native front door to LeRobot, designed so newcomers can get from "unboxing" to "training their first policy" in minutes.
 
-## ✨ Features
+🤗 Install and run everything with a single command.
 
-### 🎮 Robot Control
+## Quick Start
 
-- **Teleoperation**: Direct robot arm control through web interface
-- **Joint monitoring**: Real-time joint position feedback via WebSocket
-- **Safety controls**: Start/stop teleoperation with status monitoring
+Grab the one-liner from the [LeLab Space](https://huggingface.co/spaces/lerobot/LeLab) — it installs and runs LeLab + LeRobot in a single command.
 
-### 📹 Data Recording
+A page will automatically open in your browser and you are ready to go.
 
-- **Dataset creation**: Record episodes for training ML models
-- **Session management**: Start, stop, and manage recording sessions
-- **Episode controls**: Skip to next episode or re-record current one
-- **Real-time status**: Monitor recording progress and status
+## What you can do
 
-### ⚙️ Configuration
+<div align="center">
+  <table>
+    <tr>
+      <td>🎯 <b>Calibrate</b></td>
+      <td>Guided web flow for both arms — no keyboard prompts.</td>
+    </tr>
+    <tr>
+      <td>🕹️ <b>Teleoperate</b></td>
+      <td>Move the leader, the follower mirrors it. Live joint streaming.</td>
+    </tr>
+    <tr>
+      <td>📹 <b>Record</b></td>
+      <td>Capture episodes into a LeRobotDataset, with cameras.</td>
+    </tr>
+    <tr>
+      <td>🧠 <b>Train</b></td>
+      <td>Kick off a LeRobot training job, watch logs live.</td>
+    </tr>
+    <tr>
+      <td>🤖 <b>Run inference</b></td>
+      <td>Execute a trained policy on the follower.</td>
+    </tr>
+    <tr>
+      <td>⏪ <b>Replay</b></td>
+      <td>Re-run any recorded episode.</td>
+    </tr>
+    <tr>
+      <td>☁️ <b>Upload</b></td>
+      <td>Push your dataset to the <a href="https://huggingface.co/">Hugging Face Hub</a> in one click.</td>
+    </tr>
+  </table>
+</div>
 
-- **Config management**: Handle leader and follower robot configurations
-- **Calibration support**: Load and manage calibration settings
-- **Health monitoring**: System health checks and diagnostics
+## Resources
 
-### 🌐 Web Interface
+- **[LeRobot](https://github.com/huggingface/lerobot):** the underlying library — go here for everything beyond the UI.
+- **[LeLab Space](https://huggingface.co/spaces/lerobot/LeLab):** try the UI in your browser.
+- **[Discord](https://discord.gg/q8Dzzpym3f):** chat with the LeRobot community.
+- **[CLAUDE.md](CLAUDE.md):** architecture rundown for contributors.
 
-- **Modern UI**: Built with React, TypeScript, and Tailwind CSS
-- **Real-time updates**: WebSocket integration for live data
-- **Responsive design**: Works on desktop and mobile devices
+## Contribute
 
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.8+
-- Node.js 16+ (for frontend development)
-- LeRobot framework installed and configured
-- Compatible robot hardware
-
-### Installation
-
-1. **Clone the repository**
-
-   ```bash
-   git clone <your-repo-url>
-   cd leLab
-   ```
-
-2. **Install the Python backend**
-
-   ```bash
-   # If installing in virtual environment
-   python -m venv .venv
-   source .venv/bin/activate
-   # If installing globally
-   # Note: Git-LFS required: brew install git-lfs
-   pip install -e .
-   ```
-
-### Running the Application
-
-After installation, run:
+PRs welcome. Hot-reload mode for working on the code:
 
 ```bash
-lelab          # default: serves built frontend + backend on :8000
-lelab --dev    # contributor mode: Vite HMR (:8080) + uvicorn --reload (:8000)
+lelab --dev
 ```
 
-**Default mode** runs the backend on `http://localhost:8000` and serves the pre-built React frontend at `/`. One process, one port. No Node.js required at runtime — the built bundle ships with the package.
+Vite on `:8080`, uvicorn `--reload` on `:8000`.
 
-**`--dev` mode** spawns the Vite dev server in `frontend/` for hot module reload and runs uvicorn with `--reload`. Requires Node.js. Use this when working on frontend or backend code.
-
-The `frontend/` directory is also the source of truth for the [LeLab Hugging Face Space](https://huggingface.co/spaces/lerobot/LeLab), auto-deployed by [`.github/workflows/sync_space.yml`](.github/workflows/sync_space.yml) on every push to `main` that touches `frontend/**`.
-
-### Key Endpoints
-
-- `POST /move-arm` - Start robot teleoperation
-- `POST /stop-teleoperation` - Stop current teleoperation
-- `GET /joint-positions` - Get current joint positions
-- `POST /start-recording` - Begin dataset recording
-- `POST /stop-recording` - End recording session
-- `GET /get-configs` - Retrieve available configurations
-- `WS /ws/joint-data` - WebSocket for real-time joint data
-
-## 🏗️ Project Structure
-
-```
-leLab/
-├── app/                      # FastAPI backend
-│   ├── main.py              # Main FastAPI application; mounts frontend/dist at /
-│   ├── recording.py         # Dataset recording logic
-│   ├── teleoperating.py     # Robot teleoperation logic
-│   ├── calibrating.py       # Robot calibration logic
-│   ├── training.py          # ML training logic
-│   └── config.py            # Configuration management
-├── scripts/
-│   └── backend.py           # `lelab` entry point (default + --dev)
-├── frontend/                 # React + Vite frontend (also deployed to HF Space)
-│   ├── src/                 # React components, pages, hooks, contexts
-│   ├── public/              # Static assets
-│   ├── dist/                # Built bundle, ships with the Python package
-│   ├── Dockerfile           # Used by HF Space build
-│   └── package.json
-├── .github/workflows/        # CI (auto-deploys frontend/ to HF Space)
-├── pyproject.toml
-├── LICENSE                   # Apache 2.0
-└── README.md
-```
-
-## 🔧 Development
-
-```bash
-pip install -e .            # editable install
-cd frontend && npm install  # one-time, only if you'll touch the frontend
-lelab --dev                 # full HMR for backend + frontend
-```
-
-When you push frontend source changes to `main`, [`.github/workflows/build_frontend.yml`](.github/workflows/build_frontend.yml) automatically rebuilds `frontend/dist/` and commits it back, so the bundle that ships in the wheel stays in sync. No need to run `npm run build` manually before committing.
-
-- Backend: `http://localhost:8000`
-- Frontend (HMR): `http://localhost:8080`
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [LeRobot](https://github.com/huggingface/lerobot) - The underlying robotics framework
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern web framework for building APIs
-- [React](https://reactjs.org/) - Frontend user interface library
-
----
-
-**Note**: Make sure your LeRobot environment is properly configured and your robot hardware is connected before running the application.
+<div align="center">
+<sub>Originally hacked together by <a href="https://www.linkedin.com/posts/nicolas-rabault-_lerobot-hackathon-lerobot-ugcPost-7341065019368828930-jTnl/">Team LeLab at the 2025 LeRobot Worldwide Hackathon 🏆</a>, now maintained by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>
+</div>
