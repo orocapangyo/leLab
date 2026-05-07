@@ -14,7 +14,7 @@ Install (editable, requires Python ≥3.10):
 ```bash
 pip install -e .
 ```
-`lerobot` is pinned to a specific PyPI release (see [pyproject.toml](pyproject.toml)). Bumping it usually requires touching imports — the layout (`lerobot.scripts.lerobot_record`, `lerobot.utils.control_utils`, `lerobot.datasets.feature_utils`) shifts between releases.
+`lerobot` is pinned to a specific commit on `huggingface/lerobot` `main` (see [pyproject.toml](pyproject.toml)) — no PyPI release yet exposes the `lerobot-rollout` script that [app/inferring.py](app/inferring.py) shells out to. Bump the SHA when you want newer upstream changes; expect import-path drift (e.g. `lerobot.configs.dataset`, `lerobot.utils.feature_utils`, `lerobot.common.control_utils`) and adjust call sites accordingly.
 
 Run servers (entry point defined in [pyproject.toml](pyproject.toml)):
 ```bash

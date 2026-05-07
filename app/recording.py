@@ -6,7 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
 # Import the main record functionality to reuse it
-from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig
+from lerobot.scripts.lerobot_record import RecordConfig
+from lerobot.configs.dataset import DatasetRecordConfig
 from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 from lerobot.datasets import LeRobotDataset
@@ -585,10 +586,10 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     import time
     from lerobot.utils.utils import log_say
     from lerobot.datasets import LeRobotDataset
-    from lerobot.datasets.feature_utils import hw_to_dataset_features
+    from lerobot.utils.feature_utils import hw_to_dataset_features
     from lerobot.robots import make_robot_from_config
     from lerobot.teleoperators import make_teleoperator_from_config
-    from lerobot.utils.control_utils import sanity_check_dataset_name, sanity_check_dataset_robot_compatibility
+    from lerobot.common.control_utils import sanity_check_dataset_name, sanity_check_dataset_robot_compatibility
     from lerobot.processor import make_default_processors
     from lerobot.scripts.lerobot_record import record_loop
 
