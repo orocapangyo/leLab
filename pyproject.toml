@@ -24,6 +24,11 @@ dev = [
     "ruff>=0.6",
     "pre-commit>=3.0",
 ]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
 
 [project.scripts]
 lelab = "lelab.scripts.lelab:main"
@@ -84,3 +89,8 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-vv --maxfail=10"
+asyncio_mode = "auto"
