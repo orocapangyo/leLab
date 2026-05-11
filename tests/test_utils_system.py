@@ -30,6 +30,7 @@ def test_build_install_cmd_contains_pip_and_package() -> None:
 
 def test_build_install_cmd_uses_current_python_when_no_uv(monkeypatch) -> None:
     import shutil
+
     from lelab.utils.system import _build_install_cmd
 
     # If uv is not on PATH, command must use sys.executable.

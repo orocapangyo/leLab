@@ -63,9 +63,7 @@ def test_optional_dataset_fields_only_present_when_set() -> None:
 def test_wandb_block_only_serialized_when_enabled() -> None:
     from lelab.train import TrainingRequest, build_training_command
 
-    off = build_training_command(
-        TrainingRequest(dataset_repo_id="x", wandb_enable=False), "/tmp/out"
-    )
+    off = build_training_command(TrainingRequest(dataset_repo_id="x", wandb_enable=False), "/tmp/out")
     assert _arg_value(off, "--wandb.enable") == "false"
     assert "--wandb.project" not in off
 

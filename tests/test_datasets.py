@@ -18,8 +18,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 
 def _make_dataset(root: Path, repo_id: str) -> None:
     """Create the minimal layout `_is_dataset_dir` recognizes."""
@@ -31,11 +29,11 @@ def _make_dataset(root: Path, repo_id: str) -> None:
 def test_list_local_datasets_empty_when_root_missing(
     tmp_lerobot_home: Path,
 ) -> None:
-    from lelab.datasets import list_local_datasets
-
     # tmp_lerobot_home creates the cache; remove it so the function sees the
     # "missing root" branch.
     import shutil
+
+    from lelab.datasets import list_local_datasets
 
     shutil.rmtree(tmp_lerobot_home)
     assert list_local_datasets() == []

@@ -13,22 +13,18 @@
 # limitations under the License.
 
 import json
-import os
-import shutil
 import logging
+import os
 import platform
+import shutil
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Define the calibration config paths (shared between features)
-CALIBRATION_BASE_PATH_TELEOP = os.path.expanduser(
-    "~/.cache/huggingface/lerobot/calibration/teleoperators"
-)
-CALIBRATION_BASE_PATH_ROBOTS = os.path.expanduser(
-    "~/.cache/huggingface/lerobot/calibration/robots"
-)
+CALIBRATION_BASE_PATH_TELEOP = os.path.expanduser("~/.cache/huggingface/lerobot/calibration/teleoperators")
+CALIBRATION_BASE_PATH_ROBOTS = os.path.expanduser("~/.cache/huggingface/lerobot/calibration/robots")
 LEADER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_TELEOP, "so_leader")
 FOLLOWER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_ROBOTS, "so_follower")
 
@@ -45,6 +41,7 @@ FOLLOWER_CONFIG_FILE = os.path.join(CONFIG_STORAGE_PATH, "follower_config.txt")
 # Robot config records (per-robot JSON metadata)
 ROBOTS_PATH = os.path.expanduser("~/.cache/huggingface/lerobot/robots")
 
+
 def setup_calibration_files(leader_config: str, follower_config: str):
     """Setup calibration files in the correct locations for teleoperation and recording"""
     # Extract config names from file paths (remove .json extension)
@@ -55,7 +52,7 @@ def setup_calibration_files(leader_config: str, follower_config: str):
     leader_config_full_path = os.path.join(LEADER_CONFIG_PATH, leader_config)
     follower_config_full_path = os.path.join(FOLLOWER_CONFIG_PATH, follower_config)
 
-    logger.info(f"Checking calibration files:")
+    logger.info("Checking calibration files:")
     logger.info(f"Leader config path: {leader_config_full_path}")
     logger.info(f"Follower config path: {follower_config_full_path}")
     logger.info(f"Leader config exists: {os.path.exists(leader_config_full_path)}")
@@ -100,7 +97,7 @@ def setup_follower_calibration_file(follower_config: str):
     # Log the full path to check if file exists
     follower_config_full_path = os.path.join(FOLLOWER_CONFIG_PATH, follower_config)
 
-    logger.info(f"Checking follower calibration file:")
+    logger.info("Checking follower calibration file:")
     logger.info(f"Follower config path: {follower_config_full_path}")
     logger.info(f"Follower config exists: {os.path.exists(follower_config_full_path)}")
 
@@ -127,8 +124,8 @@ def find_available_ports():
     """Find all available serial ports on the system"""
     try:
         from serial.tools import list_ports  # Part of pyserial library
-    except ImportError:
-        raise ImportError("pyserial library is required. Install it with: pip install pyserial")
+    except ImportError as exc:
+        raise ImportError("pyserial library is required. Install it with: pip install pyserial") from exc
 
     if platform.system() == "Windows":
         # List COM ports using pyserial
@@ -142,25 +139,22 @@ def find_available_ports():
 def find_robot_port(robot_type="robot"):
     """
     Find the port for a robot by detecting the difference when disconnecting/reconnecting
-    
+
     Args:
         robot_type (str): Type of robot ("leader" or "follower" or generic "robot")
-    
+
     Returns:
         str: The detected port
     """
     logger.info(f"Finding port for {robot_type}")
-    
+
     # Get initial ports
     ports_before = find_available_ports()
     logger.info(f"Ports before disconnecting: {ports_before}")
-    
+
     # This function returns the port detection logic, but the actual user interaction
     # should be handled by the frontend
-    return {
-        "ports_before": ports_before,
-        "robot_type": robot_type
-    }
+    return {"ports_before": ports_before, "robot_type": robot_type}
 
 
 def detect_port_after_disconnect(ports_before, timeout_s: float = 15.0, poll_interval_s: float = 0.3):
@@ -201,46 +195,48 @@ def detect_port_after_disconnect(ports_before, timeout_s: float = 15.0, poll_int
         time.sleep(poll_interval_s)
 
     logger.info(f"Timed out waiting for unplug. Final diff: {last_diff}")
-    raise OSError("Timed out waiting for the robot to be unplugged. Please try again and unplug the USB cable when prompted.")
+    raise OSError(
+        "Timed out waiting for the robot to be unplugged. Please try again and unplug the USB cable when prompted."
+    )
 
 
 def save_robot_port(robot_type, port):
     """
     Save the robot port to a file for future use
-    
+
     Args:
         robot_type (str): "leader" or "follower"
         port (str): The port to save
     """
     # Create port config directory if it doesn't exist
     os.makedirs(PORT_CONFIG_PATH, exist_ok=True)
-    
+
     port_file = LEADER_PORT_FILE if robot_type == "leader" else FOLLOWER_PORT_FILE
-    
-    with open(port_file, 'w') as f:
+
+    with open(port_file, "w") as f:
         f.write(port)
-    
+
     logger.info(f"Saved {robot_type} port: {port}")
 
 
 def get_saved_robot_port(robot_type):
     """
     Get the saved robot port from file
-    
+
     Args:
         robot_type (str): "leader" or "follower"
-    
+
     Returns:
         str or None: The saved port, or None if not found
     """
     port_file = LEADER_PORT_FILE if robot_type == "leader" else FOLLOWER_PORT_FILE
-    
+
     if os.path.exists(port_file):
-        with open(port_file, 'r') as f:
+        with open(port_file) as f:
             port = f.read().strip()
             logger.info(f"Retrieved saved {robot_type} port: {port}")
             return port
-    
+
     logger.info(f"No saved port found for {robot_type}")
     return None
 
@@ -248,17 +244,17 @@ def get_saved_robot_port(robot_type):
 def get_default_robot_port(robot_type):
     """
     Get the default port for a robot, checking saved ports first
-    
+
     Args:
         robot_type (str): "leader" or "follower"
-    
+
     Returns:
         str: The default port to use
     """
     saved_port = get_saved_robot_port(robot_type)
     if saved_port:
         return saved_port
-    
+
     # Fallback to common default ports
     if platform.system() == "Windows":
         return "COM3"  # Common Windows default
@@ -271,7 +267,7 @@ def save_robot_config(robot_type: str, config_name: str):
     try:
         # Create the config storage directory if it doesn't exist
         os.makedirs(CONFIG_STORAGE_PATH, exist_ok=True)
-        
+
         # Determine the config file path
         if robot_type.lower() == "leader":
             config_file_path = LEADER_CONFIG_FILE
@@ -280,14 +276,14 @@ def save_robot_config(robot_type: str, config_name: str):
         else:
             logger.error(f"Unknown robot type: {robot_type}")
             return False
-            
+
         # Write the config name to file
-        with open(config_file_path, 'w') as f:
+        with open(config_file_path, "w") as f:
             f.write(config_name.strip())
-            
+
         logger.info(f"Saved {robot_type} configuration: {config_name}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error saving {robot_type} configuration: {e}")
         return False
@@ -304,18 +300,18 @@ def get_saved_robot_config(robot_type: str):
         else:
             logger.error(f"Unknown robot type: {robot_type}")
             return None
-            
+
         # Read the config name from file
         if os.path.exists(config_file_path):
-            with open(config_file_path, 'r') as f:
+            with open(config_file_path) as f:
                 config_name = f.read().strip()
                 if config_name:
                     logger.info(f"Found saved {robot_type} configuration: {config_name}")
                     return config_name
-                    
+
         logger.info(f"No saved {robot_type} configuration found")
         return None
-        
+
     except Exception as e:
         logger.error(f"Error reading saved {robot_type} configuration: {e}")
         return None
@@ -372,7 +368,7 @@ def get_robot_record(name: str) -> dict | None:
     if not os.path.exists(path):
         return None
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"Failed to read robot record {name}: {e}")

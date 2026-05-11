@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-from typing import Optional
 
 from huggingface_hub import HfApi, get_token, login as hf_login, whoami
 from huggingface_hub.errors import HfHubHTTPError, LocalTokenNotFoundError
@@ -28,7 +27,7 @@ LOGIN_COMMAND = "hf auth login"
 _WHOAMI_API = HfApi()
 
 
-def cached_whoami() -> Optional[dict]:
+def cached_whoami() -> dict | None:
     """Return cached whoami() for the active HF token, or None if no token.
 
     Swallows transport errors and returns None — callers treat that as

@@ -15,12 +15,13 @@
 import logging
 import math
 import time
-from typing import Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
 from pydantic import BaseModel
 
-from lerobot.teleoperators.so_leader import SO101LeaderConfig, SO101Leader
-from lerobot.robots.so_follower import SO101FollowerConfig, SO101Follower
+from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
+from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
 
 from .utils.config import setup_calibration_files
 
@@ -42,7 +43,7 @@ _STS3215_MAX_RES = 4095
 _SO101_URDF_CORRECTIONS = {
     # motor_name: (sign, urdf_zero_present_position_ticks)
     "shoulder_lift": (+1, 3252),
-    "elbow_flex":    (+1, 1029),
+    "elbow_flex": (+1, 1029),
 }
 
 # Global variables for teleoperation state
@@ -59,7 +60,7 @@ class TeleoperateRequest(BaseModel):
     follower_config: str
 
 
-def get_joint_positions_from_robot(robot) -> Dict[str, float]:
+def get_joint_positions_from_robot(robot) -> dict[str, float]:
     """
     Extract current joint positions from the robot and convert to URDF joint format.
 
@@ -82,7 +83,7 @@ def get_joint_positions_from_robot(robot) -> Dict[str, float]:
         observation = robot.get_observation()
         calibration = robot.calibration or {}
 
-        joint_positions: Dict[str, float] = {}
+        joint_positions: dict[str, float] = {}
         debug_rows = []
         for motor_name, urdf_joint_name in motor_to_urdf_mapping.items():
             motor_key = f"{motor_name}.pos"
@@ -116,25 +117,27 @@ def get_joint_positions_from_robot(robot) -> Dict[str, float]:
 
     except Exception as e:
         logger.error(f"Error getting joint positions: {e}")
-        return {urdf_name: 0.0 for urdf_name in motor_to_urdf_mapping.values()}
+        return dict.fromkeys(motor_to_urdf_mapping.values(), 0.0)
 
 
-
-def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=None) -> Dict[str, Any]:
+def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=None) -> dict[str, Any]:
     """Handle start teleoperation request"""
     global teleoperation_active, teleoperation_thread, current_robot, current_teleop
 
     if teleoperation_active:
         return {"success": False, "message": "Teleoperation is already active"}
-    from .recording import recording_active
-    from .inferring import inference_active
+    from .record import recording_active
+    from .rollout import inference_active
+
     if recording_active:
         return {"success": False, "message": "Recording is currently active. Stop it first."}
     if inference_active:
         return {"success": False, "message": "Inference is currently active. Stop it first."}
 
     try:
-        logger.info(f"Starting teleoperation with leader port: {request.leader_port}, follower port: {request.follower_port}")
+        logger.info(
+            f"Starting teleoperation with leader port: {request.leader_port}, follower port: {request.follower_port}"
+        )
 
         # Setup calibration files
         leader_config_name, follower_config_name = setup_calibration_files(
@@ -156,12 +159,12 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
         def teleoperation_worker():
             global teleoperation_active, current_robot, current_teleop
             teleoperation_active = True
-            
+
             try:
                 logger.info("Initializing robot and teleop device...")
                 robot = SO101Follower(robot_config)
                 teleop_device = SO101Leader(teleop_config)
-                
+
                 current_robot = robot
                 current_teleop = teleop_device
 
@@ -224,13 +227,13 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
                 current_teleop = None
 
         teleoperation_thread = ThreadPoolExecutor(max_workers=1)
-        future = teleoperation_thread.submit(teleoperation_worker)
+        teleoperation_thread.submit(teleoperation_worker)
 
         return {
             "success": True,
             "message": "Teleoperation started successfully",
             "leader_port": request.leader_port,
-            "follower_port": request.follower_port
+            "follower_port": request.follower_port,
         }
 
     except Exception as e:
@@ -239,7 +242,7 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
         return {"success": False, "message": f"Failed to start teleoperation: {str(e)}"}
 
 
-def handle_stop_teleoperation() -> Dict[str, Any]:
+def handle_stop_teleoperation() -> dict[str, Any]:
     """Handle stop teleoperation request"""
     global teleoperation_active, teleoperation_thread, current_robot, current_teleop
 
@@ -248,41 +251,42 @@ def handle_stop_teleoperation() -> Dict[str, Any]:
 
     try:
         logger.info("Stop teleoperation triggered from web interface")
-        
+
         # Stop the teleoperation flag
         teleoperation_active = False
-        
+
         # Force cleanup of robot connections if they exist
         try:
             if current_robot:
                 logger.info("Disconnecting robot...")
                 current_robot.disconnect()
-                
+
             if current_teleop:
                 logger.info("Disconnecting teleop device...")
                 current_teleop.disconnect()
         except Exception as cleanup_error:
             logger.warning(f"Error during device cleanup: {cleanup_error}")
-        
+
         # Wait for the thread to finish (with timeout)
         if teleoperation_thread:
             try:
                 logger.info("Waiting for teleoperation thread to finish...")
                 # Give the thread a moment to finish gracefully
                 import time
+
                 time.sleep(0.5)
-                
+
                 # Shutdown the thread pool
                 teleoperation_thread.shutdown(wait=True, timeout=5.0)
                 logger.info("Teleoperation thread stopped")
             except Exception as thread_error:
                 logger.warning(f"Error stopping teleoperation thread: {thread_error}")
-        
+
         # Clean up global variables
         current_robot = None
         current_teleop = None
         teleoperation_thread = None
-        
+
         logger.info("Teleoperation stopped successfully")
 
         return {
@@ -295,18 +299,18 @@ def handle_stop_teleoperation() -> Dict[str, Any]:
         return {"success": False, "message": f"Failed to stop teleoperation: {str(e)}"}
 
 
-def handle_teleoperation_status() -> Dict[str, Any]:
+def handle_teleoperation_status() -> dict[str, Any]:
     """Handle teleoperation status request"""
     return {
         "teleoperation_active": teleoperation_active,
         "available_controls": {
             "stop_teleoperation": teleoperation_active,
         },
-        "message": "Teleoperation status retrieved successfully"
+        "message": "Teleoperation status retrieved successfully",
     }
 
 
-def handle_get_joint_positions() -> Dict[str, Any]:
+def handle_get_joint_positions() -> dict[str, Any]:
     """Handle get current robot joint positions request"""
     global current_robot
 
@@ -315,11 +319,7 @@ def handle_get_joint_positions() -> Dict[str, Any]:
 
     try:
         joint_positions = get_joint_positions_from_robot(current_robot)
-        return {
-            "success": True,
-            "joint_positions": joint_positions,
-            "timestamp": time.time()
-        }
+        return {"success": True, "joint_positions": joint_positions, "timestamp": time.time()}
     except Exception as e:
         logger.error(f"Error getting joint positions: {e}")
-        return {"success": False, "message": f"Failed to get joint positions: {str(e)}"} 
+        return {"success": False, "message": f"Failed to get joint positions: {str(e)}"}

@@ -67,14 +67,11 @@ def patch_so101_configs(monkeypatch) -> None:
     Use sparingly — most tests prefer to patch the higher-level entry points
     (e.g. `lerobot.record.record`) instead of the config classes.
     """
+
     class _StubConfig:
         def __init__(self, **kwargs: Any) -> None:
             for k, v in kwargs.items():
                 setattr(self, k, v)
 
-    monkeypatch.setattr(
-        "lerobot.robots.so101_follower.SO101FollowerConfig", _StubConfig, raising=False
-    )
-    monkeypatch.setattr(
-        "lerobot.teleoperators.so101_leader.SO101LeaderConfig", _StubConfig, raising=False
-    )
+    monkeypatch.setattr("lerobot.robots.so101_follower.SO101FollowerConfig", _StubConfig, raising=False)
+    monkeypatch.setattr("lerobot.teleoperators.so101_leader.SO101LeaderConfig", _StubConfig, raising=False)

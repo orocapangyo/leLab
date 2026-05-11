@@ -18,16 +18,21 @@ overall state, including history persisted to disk under outputs/train/."""
 
 from __future__ import annotations
 
+import builtins
+import contextlib
+import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
-import sys
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 from queue import Empty, Queue
-from typing import List, Literal, Optional, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -42,17 +47,18 @@ JobState = Literal["running", "done", "failed", "interrupted"]
 class JobTarget(BaseModel):
     """Where a job should run. `local` ⇒ LocalJobRunner. `hf_cloud` requires
     a non-empty `flavor` from HfApi.list_jobs_hardware()."""
+
     runner: Literal["local", "hf_cloud"] = "local"
-    flavor: Optional[str] = None
+    flavor: str | None = None
 
 
 class TrainingMetrics(BaseModel):
     current_step: int = 0
     total_steps: int = 0
-    current_loss: Optional[float] = None
-    current_lr: Optional[float] = None
-    grad_norm: Optional[float] = None
-    eta_seconds: Optional[float] = None
+    current_loss: float | None = None
+    current_lr: float | None = None
+    grad_norm: float | None = None
+    eta_seconds: float | None = None
 
 
 class LogLine(BaseModel):
@@ -67,21 +73,21 @@ class JobRecord(BaseModel):
     config: TrainingRequest
     output_dir: str
     started_at: float
-    ended_at: Optional[float] = None
-    exit_code: Optional[int] = None
-    error_message: Optional[str] = None
+    ended_at: float | None = None
+    exit_code: int | None = None
+    error_message: str | None = None
     metrics: TrainingMetrics = TrainingMetrics()
     runner: Literal["local", "hf_cloud"] = "local"
     # PID of the detached subprocess (local runner only); survives uvicorn
     # --reload so a fresh registry can re-attach by tailing the log file.
-    process_pid: Optional[int] = None
+    process_pid: int | None = None
     # HF Jobs identifiers (hf_cloud runner only)
-    hf_job_id: Optional[str] = None
-    hf_flavor: Optional[str] = None
-    hf_repo_id: Optional[str] = None
-    hf_job_url: Optional[str] = None
+    hf_job_id: str | None = None
+    hf_flavor: str | None = None
+    hf_repo_id: str | None = None
+    hf_job_url: str | None = None
     # Captured from training stdout the first time wandb prints the run URL.
-    wandb_run_url: Optional[str] = None
+    wandb_run_url: str | None = None
     # Number of checkpoints currently visible (local: filesystem; cloud:
     # Hub repo). Filled in by JobRegistry.list/get; persisted as zero.
     checkpoint_count: int = 0
@@ -93,6 +99,7 @@ class JobCheckpoint(BaseModel):
     `ref` is opaque to the frontend; the inference handler resolves it back
     to a usable `--policy.path` value (a local dir for both sources, after
     snapshot_download for hub refs)."""
+
     step: int
     source: Literal["local", "hub"]
     ref: str
@@ -116,27 +123,25 @@ class JobRunner(Protocol):
     def start(self, job_id: str, config: TrainingRequest, output_dir: str) -> None: ...
     def stop(self) -> None: ...
     def is_running(self) -> bool: ...
-    def returncode(self) -> Optional[int]: ...
-    def stream_log_lines(self) -> List[LogLine]: ...
-    def wandb_run_url(self) -> Optional[str]: ...
+    def returncode(self) -> int | None: ...
+    def stream_log_lines(self) -> list[LogLine]: ...
+    def wandb_run_url(self) -> str | None: ...
 
 
 # tqdm progress: "Training:   1%|▏         | 125/10000 [02:02<2:36:10,  1.05step/s]"
-_TQDM_RE = re.compile(
-    r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)/(\d+)\s*\[(?:[\d:]+)<([\d:]+)"
-)
+_TQDM_RE = re.compile(r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)/(\d+)\s*\[(?:[\d:]+)<([\d:]+)")
 
 # Wandb prints something like "wandb: 🚀 View run at https://wandb.ai/<entity>/<project>/runs/<id>"
 # when it boots. We capture the first URL of that shape we see.
 _WANDB_URL_RE = re.compile(r"https://wandb\.ai/[^\s/]+/[^\s/]+/runs/[A-Za-z0-9]+")
 
 
-def extract_wandb_run_url(line: str) -> Optional[str]:
+def extract_wandb_run_url(line: str) -> str | None:
     match = _WANDB_URL_RE.search(line)
     return match.group(0) if match else None
 
 
-def _parse_duration(s: str) -> Optional[float]:
+def _parse_duration(s: str) -> float | None:
     """Parse tqdm's HH:MM:SS or MM:SS into seconds. Returns None on '?'."""
     parts = s.split(":")
     try:
@@ -172,24 +177,16 @@ def parse_metrics_into(line: str, metrics: TrainingMetrics) -> None:
                 pass
 
         if "step:" in line and "loss:" in line:
-            try:
+            with contextlib.suppress(ValueError):
                 metrics.current_step = int(line.split("step:")[1].split()[0].replace(",", ""))
-            except ValueError:
-                pass
-            try:
+            with contextlib.suppress(ValueError):
                 metrics.current_loss = float(line.split("loss:")[1].split()[0])
-            except ValueError:
-                pass
             if "lr:" in line:
-                try:
+                with contextlib.suppress(ValueError):
                     metrics.current_lr = float(line.split("lr:")[1].split()[0])
-                except ValueError:
-                    pass
             if "grdn:" in line:
-                try:
+                with contextlib.suppress(ValueError):
                     metrics.grad_norm = float(line.split("grdn:")[1].split()[0])
-                except ValueError:
-                    pass
 
     except Exception as exc:
         logger.debug("Error parsing log line %r: %s", line, exc)
@@ -205,16 +202,16 @@ class LocalJobRunner:
     def __init__(
         self,
         metrics: TrainingMetrics,
-        log_file_path: Optional["Path"] = None,
+        log_file_path: Path | None = None,
     ) -> None:
         self._metrics = metrics
-        self._process: Optional[subprocess.Popen] = None
-        self._log_queue: "Queue[LogLine]" = Queue()
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._process: subprocess.Popen | None = None
+        self._log_queue: Queue[LogLine] = Queue()
+        self._monitor_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._log_file_path = log_file_path
         self._log_file = None  # type: ignore[assignment]
-        self._wandb_run_url: Optional[str] = None
+        self._wandb_run_url: str | None = None
 
     def start(
         self,
@@ -227,6 +224,7 @@ class LocalJobRunner:
 
         # Build the command via the helper that lives in training.py.
         from .training import build_training_command  # avoid import cycle at module load
+
         cmd = build_training_command(config, output_dir)
         logger.info("Starting job %s: %s", job_id, " ".join(cmd))
 
@@ -261,7 +259,7 @@ class LocalJobRunner:
         )
         self._monitor_thread.start()
 
-    def pid(self) -> Optional[int]:
+    def pid(self) -> int | None:
         return self._process.pid if self._process is not None else None
 
     def stop(self) -> None:
@@ -282,14 +280,14 @@ class LocalJobRunner:
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
-    def returncode(self) -> Optional[int]:
+    def returncode(self) -> int | None:
         if self._process is None:
             return None
         return self._process.poll()
 
-    def stream_log_lines(self) -> List[LogLine]:
+    def stream_log_lines(self) -> list[LogLine]:
         """Drain whatever has accumulated since the last call."""
-        out: List[LogLine] = []
+        out: list[LogLine] = []
         try:
             while True:
                 out.append(self._log_queue.get_nowait())
@@ -297,7 +295,7 @@ class LocalJobRunner:
             pass
         return out
 
-    def wandb_run_url(self) -> Optional[str]:
+    def wandb_run_url(self) -> str | None:
         return self._wandb_run_url
 
     # -- internals --
@@ -324,27 +322,16 @@ class LocalJobRunner:
                         logger.exception("Error writing to log file: %s", exc)
                 # Cap queue so a chatty subprocess can't grow memory unbounded.
                 if self._log_queue.qsize() >= 1000:
-                    try:
+                    with contextlib.suppress(Empty):
                         self._log_queue.get_nowait()
-                    except Empty:
-                        pass
                 self._log_queue.put(log_line)
         except Exception as exc:
             logger.exception("Error reading subprocess stdout: %s", exc)
         finally:
             if self._log_file is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._log_file.close()
-                except Exception:
-                    pass
                 self._log_file = None
-
-
-import json
-import shutil
-from datetime import datetime
-from pathlib import Path
-from typing import Dict
 
 
 class TailingJobRunner:
@@ -365,19 +352,18 @@ class TailingJobRunner:
         self._metrics = metrics
         self._log_file_path = log_file_path
         self._pid = pid
-        self._log_queue: "Queue[LogLine]" = Queue()
-        self._tail_thread: Optional[threading.Thread] = None
+        self._log_queue: Queue[LogLine] = Queue()
+        self._tail_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         # Replay everything that's already on disk so the parser catches up
         # on metrics, then tail from the current EOF.
         self._tail_offset = 0
-        self._wandb_run_url: Optional[str] = None
+        self._wandb_run_url: str | None = None
 
     def start(self, job_id: str, config: TrainingRequest, output_dir: str) -> None:
         # Required by JobRunner Protocol but irrelevant here; the subprocess
         # we're tailing was started by a previous uvicorn worker.
-        raise RuntimeError("TailingJobRunner reattaches to an existing pid; "
-                           "use start_tailing() instead")
+        raise RuntimeError("TailingJobRunner reattaches to an existing pid; use start_tailing() instead")
 
     def start_tailing(self) -> None:
         if self._tail_thread is not None:
@@ -388,16 +374,14 @@ class TailingJobRunner:
         self._tail_thread.start()
 
     def stop(self) -> None:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.kill(self._pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
         self._stop_event.set()
 
     def is_running(self) -> bool:
         return _pid_alive(self._pid)
 
-    def returncode(self) -> Optional[int]:
+    def returncode(self) -> int | None:
         # We can't reap a process from another session, so we don't know the
         # actual exit code. Return 0 once the pid is gone — the watchdog
         # finalises as "done" rather than "failed", which is the better
@@ -406,8 +390,8 @@ class TailingJobRunner:
             return None
         return 0
 
-    def stream_log_lines(self) -> List[LogLine]:
-        out: List[LogLine] = []
+    def stream_log_lines(self) -> list[LogLine]:
+        out: list[LogLine] = []
         try:
             while True:
                 out.append(self._log_queue.get_nowait())
@@ -415,10 +399,10 @@ class TailingJobRunner:
             pass
         return out
 
-    def pid(self) -> Optional[int]:
+    def pid(self) -> int | None:
         return self._pid
 
-    def wandb_run_url(self) -> Optional[str]:
+    def wandb_run_url(self) -> str | None:
         return self._wandb_run_url
 
     # -- internals --
@@ -453,10 +437,8 @@ class TailingJobRunner:
                             if url is not None:
                                 self._wandb_run_url = url
                         if self._log_queue.qsize() >= 1000:
-                            try:
+                            with contextlib.suppress(Empty):
                                 self._log_queue.get_nowait()
-                            except Empty:
-                                pass
                         self._log_queue.put(log_line)
         except Exception as exc:
             logger.exception("Tailing loop error: %s", exc)
@@ -465,7 +447,7 @@ class TailingJobRunner:
 _PERSIST_THROTTLE_SECONDS = 1.0
 
 
-def _list_local_checkpoints(output_dir: str) -> List[JobCheckpoint]:
+def _list_local_checkpoints(output_dir: str) -> list[JobCheckpoint]:
     """Scan an output dir for valid checkpoint subdirectories.
 
     A directory under <output_dir>/checkpoints/ is a valid checkpoint iff
@@ -474,7 +456,7 @@ def _list_local_checkpoints(output_dir: str) -> List[JobCheckpoint]:
     root = Path(output_dir) / "checkpoints"
     if not root.is_dir():
         return []
-    out: List[JobCheckpoint] = []
+    out: list[JobCheckpoint] = []
     for entry in root.iterdir():
         if entry.is_symlink() or not entry.is_dir():
             continue
@@ -485,11 +467,13 @@ def _list_local_checkpoints(output_dir: str) -> List[JobCheckpoint]:
         config_json = entry / "pretrained_model" / "config.json"
         if not config_json.is_file():
             continue
-        out.append(JobCheckpoint(
-            step=step,
-            source="local",
-            ref=str((entry / "pretrained_model").resolve()),
-        ))
+        out.append(
+            JobCheckpoint(
+                step=step,
+                source="local",
+                ref=str((entry / "pretrained_model").resolve()),
+            )
+        )
     out.sort(key=lambda c: c.step)
     return out
 
@@ -498,7 +482,7 @@ _CLOUD_CKPT_TTL_SECONDS = 30.0
 _CKPT_PATH_RE = re.compile(r"^checkpoints/(\d+)/pretrained_model/config\.json$")
 
 
-def _list_hub_checkpoints(api, repo_id: str) -> List[JobCheckpoint]:
+def _list_hub_checkpoints(api, repo_id: str) -> list[JobCheckpoint]:
     """List checkpoints by introspecting the model repo file tree.
 
     The ref preserves the original directory name (zero-padded by
@@ -511,7 +495,7 @@ def _list_hub_checkpoints(api, repo_id: str) -> List[JobCheckpoint]:
         # Repo may not exist yet (training just started, sidecar hasn't
         # uploaded anything). Treat as no checkpoints.
         return []
-    seen: Dict[int, JobCheckpoint] = {}
+    seen: dict[int, JobCheckpoint] = {}
     for path in files:
         m = _CKPT_PATH_RE.match(path)
         if not m:
@@ -534,7 +518,7 @@ _LANGUAGE_CONDITIONED_POLICY_TYPES = {"smolvla", "pi0", "pi0_fast", "pi05"}
 _HUB_CKPT_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
 
 
-def _read_checkpoint_config(record: "JobRecord", ckpt: "JobCheckpoint") -> Dict[str, object]:
+def _read_checkpoint_config(record: JobRecord, ckpt: JobCheckpoint) -> dict[str, object]:
     """Load the pretrained_model/config.json for one checkpoint.
 
     Local refs carry the absolute directory path; cloud refs carry the
@@ -551,6 +535,7 @@ def _read_checkpoint_config(record: "JobRecord", ckpt: "JobCheckpoint") -> Dict[
     repo_id = m.group("repo")
     step_dir = m.group("step_dir")
     from huggingface_hub import hf_hub_download
+
     local_path = hf_hub_download(
         repo_id=repo_id,
         filename=f"checkpoints/{step_dir}/pretrained_model/config.json",
@@ -563,6 +548,7 @@ def _read_checkpoint_config(record: "JobRecord", ckpt: "JobCheckpoint") -> Dict[
 def _generate_job_id(policy_type: str, dataset_repo_id: str) -> str:
     """Build a sortable, collision-free job id from policy type and dataset slug."""
     from .training import _SLUG_RE
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dataset_slug = _SLUG_RE.sub("_", dataset_repo_id).strip("_") or "dataset"
     return f"{policy_type}_{dataset_slug}_{timestamp}"
@@ -605,22 +591,22 @@ class JobRegistry:
         self._output_root.mkdir(parents=True, exist_ok=True)
 
         self._lock = threading.Lock()
-        self._records: Dict[str, JobRecord] = {}
-        self._runners: Dict[str, JobRunner] = {}
-        self._last_persist_at: Dict[str, float] = {}
+        self._records: dict[str, JobRecord] = {}
+        self._runners: dict[str, JobRunner] = {}
+        self._last_persist_at: dict[str, float] = {}
 
         self._stop_watchdog = threading.Event()
-        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: threading.Thread | None = None
 
         # repo_id -> (expires_at_epoch, checkpoint list)
-        self._cloud_ckpt_cache: Dict[str, tuple[float, List[JobCheckpoint]]] = {}
+        self._cloud_ckpt_cache: dict[str, tuple[float, list[JobCheckpoint]]] = {}
 
         self._load_from_disk()
         self._start_watchdog()
 
     # -- public API --
 
-    def list(self, limit: int = 10) -> List[JobRecord]:
+    def list(self, limit: int = 10) -> builtins.list[JobRecord]:
         with self._lock:
             records = list(self._records.values())
         records.sort(key=lambda r: r.started_at, reverse=True)
@@ -637,7 +623,7 @@ class JobRegistry:
         record.checkpoint_count = self._count_checkpoints(record)
         return record
 
-    def start(self, config: TrainingRequest, target: Optional[JobTarget] = None) -> JobRecord:
+    def start(self, config: TrainingRequest, target: JobTarget | None = None) -> JobRecord:
         from .runners.hf_cloud import HfCloudJobRunner  # lazy import to avoid circular import
 
         target = target or JobTarget()
@@ -720,7 +706,7 @@ class JobRegistry:
                     return record
         return record
 
-    def drain_logs(self, job_id: str) -> List[LogLine]:
+    def drain_logs(self, job_id: str) -> builtins.list[LogLine]:
         with self._lock:
             if job_id not in self._records:
                 raise JobNotFoundError(job_id)
@@ -729,7 +715,7 @@ class JobRegistry:
             return []
         return runner.stream_log_lines()
 
-    def read_persisted_logs(self, job_id: str) -> List[LogLine]:
+    def read_persisted_logs(self, job_id: str) -> builtins.list[LogLine]:
         """Read all log lines that have been written to disk for this job.
 
         Used by the frontend on Monitoring-page mount to seed the log panel
@@ -742,7 +728,7 @@ class JobRegistry:
         path = _job_log_path(self._output_root, job_id)
         if not path.exists():
             return []
-        out: List[LogLine] = []
+        out: list[LogLine] = []
         with path.open() as f:
             for raw in f:
                 raw = raw.strip()
@@ -754,7 +740,7 @@ class JobRegistry:
                     continue  # skip a malformed line rather than 500ing
         return out
 
-    def list_checkpoints(self, job_id: str) -> List[JobCheckpoint]:
+    def list_checkpoints(self, job_id: str) -> builtins.list[JobCheckpoint]:
         """Return checkpoints saved for this job, ascending by step.
 
         Local jobs: scan <output_dir>/checkpoints/<step>/pretrained_model/
@@ -770,10 +756,11 @@ class JobRegistry:
             return _list_local_checkpoints(record.output_dir)
         return self._list_cloud_cached(record.hf_repo_id)
 
-    def _list_cloud_cached(self, repo_id: Optional[str]) -> List[JobCheckpoint]:
+    def _list_cloud_cached(self, repo_id: str | None) -> builtins.list[JobCheckpoint]:
         if not repo_id:
             return []
         from huggingface_hub import HfApi  # lazy: keeps unit-test imports cheap
+
         now = time.time()
         cached = self._cloud_ckpt_cache.get(repo_id)
         if cached is not None and cached[0] > now:
@@ -787,7 +774,7 @@ class JobRegistry:
             return len(_list_local_checkpoints(record.output_dir))
         return len(self._list_cloud_cached(record.hf_repo_id))
 
-    def get_policy_config_summary(self, job_id: str, step: int) -> Dict[str, object]:
+    def get_policy_config_summary(self, job_id: str, step: int) -> dict[str, object]:
         """Read the checkpoint's pretrained_model/config.json and return only
         the UX-relevant slice: policy type, expected camera names + their
         height/width, and whether the policy needs a --task string."""
@@ -798,12 +785,10 @@ class JobRegistry:
         ckpts = self.list_checkpoints(job_id)
         match = next((c for c in ckpts if c.step == step), None)
         if match is None:
-            raise FileNotFoundError(
-                f"No checkpoint at step {step} for job {record.id}"
-            )
+            raise FileNotFoundError(f"No checkpoint at step {step} for job {record.id}")
         cfg = _read_checkpoint_config(record, match)
         policy_type = cfg.get("type")
-        image_features: Dict[str, Dict[str, int]] = {}
+        image_features: dict[str, dict[str, int]] = {}
         for full_name, feat in (cfg.get("input_features") or {}).items():
             if feat.get("type") != "VISUAL":
                 continue
@@ -831,10 +816,8 @@ class JobRegistry:
             self._records.pop(job_id, None)
             self._runners.pop(job_id, None)
             self._last_persist_at.pop(job_id, None)
-        try:
+        with contextlib.suppress(FileNotFoundError):
             shutil.rmtree(_job_dir(self._output_root, job_id))
-        except FileNotFoundError:
-            pass
 
     def shutdown(self) -> None:
         """For tests / orderly process exit. Not wired to FastAPI lifespan today."""
@@ -859,7 +842,8 @@ class JobRegistry:
                     if pid is not None and _pid_alive(pid):
                         logger.info(
                             "Re-attaching to detached local job %s (pid %d)",
-                            record.id, pid,
+                            record.id,
+                            pid,
                         )
                         runner = TailingJobRunner(
                             record.metrics,
@@ -877,6 +861,7 @@ class JobRegistry:
                     # Probe HF for the live status before reattaching.
                     try:
                         from huggingface_hub import HfApi
+
                         info = HfApi().inspect_job(job_id=record.hf_job_id)
                         # info.status is a JobStatus dataclass; the stage
                         # string lives on .stage.
@@ -886,16 +871,19 @@ class JobRegistry:
                     except Exception as exc:
                         logger.warning(
                             "inspect_job failed during reattach for %s: %s",
-                            record.id, exc,
+                            record.id,
+                            exc,
                         )
                         stage_str = ""
                     terminal = {"COMPLETED", "CANCELED", "CANCELLED", "ERROR", "FAILED", "DELETED"}
                     if stage_str and stage_str not in terminal:
                         logger.info(
                             "Re-attaching to HF Cloud job %s (hf_job_id=%s)",
-                            record.id, record.hf_job_id,
+                            record.id,
+                            record.hf_job_id,
                         )
                         from .runners.hf_cloud import HfCloudJobRunner
+
                         runner = HfCloudJobRunner(
                             record.metrics,
                             _job_log_path(self._output_root, record.id),

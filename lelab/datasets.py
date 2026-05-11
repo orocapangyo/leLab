@@ -14,7 +14,7 @@
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +39,7 @@ def _is_dataset_dir(path: Path) -> bool:
 def _dir_mtime_iso(path: Path) -> str | None:
     try:
         ts = path.stat().st_mtime
-        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(ts, tz=UTC).isoformat()
     except OSError:
         return None
 
@@ -70,11 +70,13 @@ def list_local_datasets() -> list[dict[str, Any]]:
             continue
 
         if _is_dataset_dir(top):
-            out.append({
-                "repo_id": top.name,
-                "last_modified": _dir_mtime_iso(top),
-                "private": False,
-            })
+            out.append(
+                {
+                    "repo_id": top.name,
+                    "last_modified": _dir_mtime_iso(top),
+                    "private": False,
+                }
+            )
             continue
 
         # Not a dataset itself — descend one level.
@@ -89,11 +91,13 @@ def list_local_datasets() -> list[dict[str, Any]]:
             except OSError:
                 continue
             if _is_dataset_dir(sub):
-                out.append({
-                    "repo_id": f"{top.name}/{sub.name}",
-                    "last_modified": _dir_mtime_iso(sub),
-                    "private": False,
-                })
+                out.append(
+                    {
+                        "repo_id": f"{top.name}/{sub.name}",
+                        "last_modified": _dir_mtime_iso(sub),
+                        "private": False,
+                    }
+                )
 
     out.sort(key=lambda d: d["last_modified"] or "", reverse=True)
     return out
@@ -115,11 +119,13 @@ def list_user_datasets() -> list[dict[str, Any]]:
                 if ds.id in seen:
                     continue
                 seen.add(ds.id)
-                out.append({
-                    "repo_id": ds.id,
-                    "last_modified": ds.last_modified.isoformat() if ds.last_modified else None,
-                    "private": bool(getattr(ds, "private", False)),
-                })
+                out.append(
+                    {
+                        "repo_id": ds.id,
+                        "last_modified": ds.last_modified.isoformat() if ds.last_modified else None,
+                        "private": bool(getattr(ds, "private", False)),
+                    }
+                )
         except HfHubHTTPError as e:
             logger.warning(f"list_datasets({author}) failed: {e}")
 

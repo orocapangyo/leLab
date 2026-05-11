@@ -17,8 +17,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 
 def test_invalidate_whoami_cache_clears_cached_value() -> None:
     from lelab.utils import hf_auth

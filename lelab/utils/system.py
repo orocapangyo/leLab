@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import importlib.util
 import logging
 import queue
@@ -20,7 +21,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -36,7 +37,7 @@ WANDB_AVAILABLE: bool = importlib.util.find_spec("wandb") is not None
 WANDB_INSTALL_HINT: str = "pip install wandb"
 
 
-def _build_install_cmd(package: str) -> List[str]:
+def _build_install_cmd(package: str) -> list[str]:
     """Pick the best installer for the running Python.
 
     Venvs created with `uv venv` don't ship pip, so `python -m pip` fails with
@@ -61,21 +62,21 @@ class InstallStartResponse(BaseModel):
 
 class InstallStatusResponse(BaseModel):
     state: str  # "idle" | "installing" | "done" | "error"
-    error: Optional[str] = None
-    logs: List[Dict[str, Any]] = []
+    error: str | None = None
+    logs: list[dict[str, Any]] = []
 
 
 class InstallManager:
     def __init__(self, package: str) -> None:
         self.package = package
         self.state: str = "idle"
-        self.error: Optional[str] = None
-        self.process: Optional[subprocess.Popen] = None
-        self.log_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
-        self._thread: Optional[threading.Thread] = None
+        self.error: str | None = None
+        self.process: subprocess.Popen | None = None
+        self.log_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-    def start(self) -> Dict[str, Any]:
+    def start(self) -> dict[str, Any]:
         with self._lock:
             if self.state == "installing":
                 return {"started": False, "message": "Install already in progress"}
@@ -103,8 +104,8 @@ class InstallManager:
         self._thread.start()
         return {"started": True, "message": "Install started"}
 
-    def get_status(self) -> Dict[str, Any]:
-        logs: List[Dict[str, Any]] = []
+    def get_status(self) -> dict[str, Any]:
+        logs: list[dict[str, Any]] = []
         try:
             while not self.log_queue.empty():
                 logs.append(self.log_queue.get_nowait())
@@ -136,10 +137,8 @@ class InstallManager:
     def _enqueue(self, message: str) -> None:
         # Cap queue size so a chatty pip can't grow memory unbounded.
         if self.log_queue.qsize() >= 1000:
-            try:
+            with contextlib.suppress(queue.Empty):
                 self.log_queue.get_nowait()
-            except queue.Empty:
-                pass
         self.log_queue.put({"timestamp": time.time(), "message": message})
 
     def _drain_queue(self) -> None:
@@ -154,25 +153,25 @@ training_install_manager = InstallManager("accelerate")
 wandb_install_manager = InstallManager("wandb")
 
 
-def handle_get_training_extra() -> Dict[str, Any]:
+def handle_get_training_extra() -> dict[str, Any]:
     return {"available": TRAINING_AVAILABLE, "install_hint": TRAINING_INSTALL_HINT}
 
 
-def handle_install_training_extra() -> Dict[str, Any]:
+def handle_install_training_extra() -> dict[str, Any]:
     return training_install_manager.start()
 
 
-def handle_install_training_extra_status() -> Dict[str, Any]:
+def handle_install_training_extra_status() -> dict[str, Any]:
     return training_install_manager.get_status()
 
 
-def handle_get_wandb_extra() -> Dict[str, Any]:
+def handle_get_wandb_extra() -> dict[str, Any]:
     return {"available": WANDB_AVAILABLE, "install_hint": WANDB_INSTALL_HINT}
 
 
-def handle_install_wandb_extra() -> Dict[str, Any]:
+def handle_install_wandb_extra() -> dict[str, Any]:
     return wandb_install_manager.start()
 
 
-def handle_install_wandb_extra_status() -> Dict[str, Any]:
+def handle_install_wandb_extra_status() -> dict[str, Any]:
     return wandb_install_manager.get_status()

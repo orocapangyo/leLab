@@ -19,21 +19,18 @@ lives in app/jobs.py.
 """
 
 import re
-from typing import List, Optional
 
 from pydantic import BaseModel
 
-
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
-
 
 
 class TrainingRequest(BaseModel):
     # Dataset configuration
     dataset_repo_id: str
-    dataset_revision: Optional[str] = None
-    dataset_root: Optional[str] = None
-    dataset_episodes: Optional[List[int]] = None
+    dataset_revision: str | None = None
+    dataset_root: str | None = None
+    dataset_episodes: list[int] | None = None
 
     # Policy configuration
     policy_type: str = "act"
@@ -41,7 +38,7 @@ class TrainingRequest(BaseModel):
     # Core training parameters
     steps: int = 10000
     batch_size: int = 8
-    seed: Optional[int] = 1000
+    seed: int | None = 1000
     num_workers: int = 4
 
     # Logging and checkpointing
@@ -53,50 +50,50 @@ class TrainingRequest(BaseModel):
     # Output configuration
     output_dir: str = "outputs/train"
     resume: bool = False
-    job_name: Optional[str] = None
+    job_name: str | None = None
 
     # Weights & Biases
     wandb_enable: bool = False
-    wandb_project: Optional[str] = None
-    wandb_entity: Optional[str] = None
-    wandb_notes: Optional[str] = None
-    wandb_run_id: Optional[str] = None
-    wandb_mode: Optional[str] = "online"
+    wandb_project: str | None = None
+    wandb_entity: str | None = None
+    wandb_notes: str | None = None
+    wandb_run_id: str | None = None
+    wandb_mode: str | None = "online"
     wandb_disable_artifact: bool = False
 
     # Environment / evaluation
-    env_type: Optional[str] = None
-    env_task: Optional[str] = None
+    env_type: str | None = None
+    env_task: str | None = None
     eval_n_episodes: int = 10
     eval_batch_size: int = 50
     eval_use_async_envs: bool = False
 
     # Policy-specific
-    policy_device: Optional[str] = "cuda"
+    policy_device: str | None = "cuda"
     policy_use_amp: bool = False
     # Hub upload (set by HfCloudJobRunner; not exposed in the form)
     policy_push_to_hub: bool = False
-    policy_repo_id: Optional[str] = None
+    policy_repo_id: str | None = None
 
     # Optimizer
-    optimizer_type: Optional[str] = "adam"
-    optimizer_lr: Optional[float] = None
-    optimizer_weight_decay: Optional[float] = None
-    optimizer_grad_clip_norm: Optional[float] = None
+    optimizer_type: str | None = "adam"
+    optimizer_lr: float | None = None
+    optimizer_weight_decay: float | None = None
+    optimizer_grad_clip_norm: float | None = None
 
     # Advanced
     use_policy_training_preset: bool = True
-    config_path: Optional[str] = None
+    config_path: str | None = None
 
 
-def build_training_command(request: TrainingRequest, output_dir: str) -> List[str]:
+def build_training_command(request: TrainingRequest, output_dir: str) -> list[str]:
     """Build the argv list to invoke `python -m lerobot.scripts.lerobot_train`.
 
     `output_dir` is supplied separately from the request so the caller (the
     JobRegistry) can pin it to the per-job directory rather than relying on
     request.output_dir, which the frontend doesn't even send in the new world.
     """
-    cmd: List[str] = ["python", "-m", "lerobot.scripts.lerobot_train"]
+    cmd: list[str] = ["python", "-m", "lerobot.scripts.lerobot_train"]
 
     # Dataset
     cmd.extend(["--dataset.repo_id", request.dataset_repo_id])

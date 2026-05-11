@@ -42,9 +42,8 @@ def test_handle_get_joint_positions_returns_dict_when_idle() -> None:
 
 
 def test_get_joint_positions_from_robot_uses_provided_object() -> None:
-    from tests.mocks import FakeRobot
-
     from lelab.teleoperate import get_joint_positions_from_robot
+    from tests.mocks import FakeRobot
 
     robot = FakeRobot()
     robot.connect()

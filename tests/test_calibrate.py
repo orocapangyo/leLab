@@ -15,8 +15,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_calibration_status_defaults_to_idle() -> None:
     from lelab.calibrate import CalibrationStatus

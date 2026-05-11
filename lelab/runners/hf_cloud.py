@@ -21,6 +21,7 @@ parser since stdout format is identical to a local lerobot run.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import netrc
 import os
@@ -28,14 +29,13 @@ import threading
 import time
 from pathlib import Path
 from queue import Empty, Queue
-from typing import List, Optional
 
 from huggingface_hub import HfApi, get_token
 from huggingface_hub.errors import RepositoryNotFoundError
 
-from ..utils.hf_auth import cached_whoami
 from ..jobs import LogLine, TrainingMetrics, extract_wandb_run_url, parse_metrics_into
 from ..train import TrainingRequest, build_training_command
+from ..utils.hf_auth import cached_whoami
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ sys.exit(rc)
 HF_JOB_TIMEOUT = "2h"
 
 
-def resolve_wandb_api_key() -> Optional[str]:
+def resolve_wandb_api_key() -> str | None:
     """Look up the host's wandb API key for forwarding to a cloud job.
 
     Checks WANDB_API_KEY first, then falls back to ~/.netrc (where
@@ -185,18 +185,18 @@ class HfCloudJobRunner:
         self._log_file_path = log_file_path
         self._flavor = flavor
         self._api = HfApi()
-        self._hf_job_id: Optional[str] = None
-        self._hf_job_url: Optional[str] = None
-        self._log_queue: "Queue[LogLine]" = Queue()
-        self._tail_thread: Optional[threading.Thread] = None
+        self._hf_job_id: str | None = None
+        self._hf_job_url: str | None = None
+        self._log_queue: Queue[LogLine] = Queue()
+        self._tail_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._log_file = None  # type: ignore[assignment]
         # Cached terminal status once the job ends; None while live.
-        self._terminal_status: Optional[str] = None
+        self._terminal_status: str | None = None
         # Status.message at the terminal tick (e.g. "Job timeout"), so the
         # registry can surface it to the UI instead of a synthetic exit code.
-        self._terminal_message: Optional[str] = None
-        self._wandb_run_url: Optional[str] = None
+        self._terminal_message: str | None = None
+        self._wandb_run_url: str | None = None
 
     def start(self, job_id: str, config: TrainingRequest, output_dir: str) -> None:
         if self._hf_job_id is not None:
@@ -204,9 +204,7 @@ class HfCloudJobRunner:
 
         token = get_token()
         if not token:
-            raise RuntimeError(
-                "HF token not found. Run 'hf auth login' before launching cloud jobs."
-            )
+            raise RuntimeError("HF token not found. Run 'hf auth login' before launching cloud jobs.")
 
         whoami = cached_whoami()
         username = whoami.get("name") if whoami else None
@@ -236,7 +234,9 @@ class HfCloudJobRunner:
         wrapped_command = ["python", "-c", WRAPPER_SOURCE, "--", *trainer_argv]
         logger.info(
             "Submitting HF Cloud job %s on %s (wrapped trainer): %s",
-            job_id, self._flavor, " ".join(trainer_argv),
+            job_id,
+            self._flavor,
+            " ".join(trainer_argv),
         )
 
         # HF_TOKEN goes via `secrets` (not `env`) so it doesn't show up in
@@ -308,9 +308,7 @@ class HfCloudJobRunner:
         except RepositoryNotFoundError:
             pass
 
-        cache_root = Path(
-            os.environ.get("HF_LEROBOT_HOME", "~/.cache/huggingface/lerobot")
-        ).expanduser()
+        cache_root = Path(os.environ.get("HF_LEROBOT_HOME", "~/.cache/huggingface/lerobot")).expanduser()
         if not (cache_root / repo_id / "meta" / "info.json").is_file():
             # Neither local nor on Hub. Let the trainer surface the error
             # — same behaviour as before.
@@ -318,6 +316,7 @@ class HfCloudJobRunner:
 
         self._log_line(f"[upload] dataset {repo_id} not on Hub; pushing local copy...")
         from lerobot.datasets import LeRobotDataset
+
         try:
             LeRobotDataset(repo_id).push_to_hub(tags=[], private=False)
         except Exception as exc:
@@ -357,10 +356,8 @@ class HfCloudJobRunner:
                             except Exception as exc:  # pragma: no cover
                                 logger.exception("Error writing HF log: %s", exc)
                         if self._log_queue.qsize() >= 1000:
-                            try:
+                            with contextlib.suppress(Empty):
                                 self._log_queue.get_nowait()
-                            except Empty:
-                                pass
                         self._log_queue.put(log_line)
                     # Generator returned cleanly — job ended.
                     return
@@ -369,18 +366,16 @@ class HfCloudJobRunner:
                     if retries > 3:
                         logger.warning(
                             "HF log tail gave up after 3 retries for job %s: %s",
-                            self._hf_job_id, exc,
+                            self._hf_job_id,
+                            exc,
                         )
                         return
-                    logger.info("HF log tail disconnected (retry %d/3): %s",
-                                retries, exc)
-                    self._stop_event.wait(2 ** retries)
+                    logger.info("HF log tail disconnected (retry %d/3): %s", retries, exc)
+                    self._stop_event.wait(2**retries)
         finally:
             if self._log_file is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._log_file.close()
-                except Exception:
-                    pass
                 self._log_file = None
 
     def stop(self) -> None:
@@ -421,7 +416,7 @@ class HfCloudJobRunner:
             return False
         return True
 
-    def returncode(self) -> Optional[int]:
+    def returncode(self) -> int | None:
         if self._hf_job_id is None:
             return None
         # If we haven't yet observed the terminal status, ask now.
@@ -431,8 +426,8 @@ class HfCloudJobRunner:
             return None
         return 0 if self._terminal_status == "COMPLETED" else 1
 
-    def stream_log_lines(self) -> List[LogLine]:
-        out: List[LogLine] = []
+    def stream_log_lines(self) -> list[LogLine]:
+        out: list[LogLine] = []
         try:
             while True:
                 out.append(self._log_queue.get_nowait())
@@ -440,16 +435,16 @@ class HfCloudJobRunner:
             pass
         return out
 
-    def hf_job_id(self) -> Optional[str]:
+    def hf_job_id(self) -> str | None:
         return self._hf_job_id
 
-    def hf_job_url(self) -> Optional[str]:
+    def hf_job_url(self) -> str | None:
         return self._hf_job_url
 
-    def wandb_run_url(self) -> Optional[str]:
+    def wandb_run_url(self) -> str | None:
         return self._wandb_run_url
 
-    def terminal_message(self) -> Optional[str]:
+    def terminal_message(self) -> str | None:
         """Status.message captured when the job reached a terminal stage.
 
         Set by the most recent is_running() call that observed a terminal

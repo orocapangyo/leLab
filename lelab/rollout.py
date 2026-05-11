@@ -23,6 +23,7 @@ via huggingface_hub.snapshot_download before we spawn the subprocess.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -30,7 +31,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -42,17 +43,17 @@ logger = logging.getLogger(__name__)
 class InferenceRequest(BaseModel):
     follower_port: str
     follower_config: str
-    policy_ref: str          # opaque ref returned by /jobs/{id}/checkpoints
+    policy_ref: str  # opaque ref returned by /jobs/{id}/checkpoints
     task: str = ""
-    cameras: Dict[str, Dict[str, Any]] = {}
+    cameras: dict[str, dict[str, Any]] = {}
     duration_s: int = 60
 
 
 inference_active: bool = False
-_inference_proc: Optional[subprocess.Popen] = None
-_inference_started_at: Optional[float] = None
-_inference_rollout_started_at: Optional[float] = None
-_inference_meta: Dict[str, Any] = {}
+_inference_proc: subprocess.Popen | None = None
+_inference_started_at: float | None = None
+_inference_rollout_started_at: float | None = None
+_inference_meta: dict[str, Any] = {}
 _HUB_REF_RE = re.compile(r"^(?P<repo>[^@]+)@checkpoints/(?P<step_dir>\d+)$")
 # lerobot prints this once per run, the moment its main control loop is
 # about to take over from the setup phase. We watch stdout for it so the
@@ -76,10 +77,7 @@ def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
                 log_handle.flush()
             except Exception:
                 pass
-            if (
-                _inference_rollout_started_at is None
-                and _ROLLOUT_START_MARKER in line
-            ):
+            if _inference_rollout_started_at is None and _ROLLOUT_START_MARKER in line:
                 _inference_rollout_started_at = time.time()
                 logger.info(
                     "Inference rollout main loop started after %.1fs of setup",
@@ -88,16 +86,15 @@ def _pump_stdout(proc: subprocess.Popen, log_handle) -> None:
     except Exception as exc:
         logger.exception("Inference stdout pump failed: %s", exc)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             log_handle.close()
-        except Exception:
-            pass
 
 
 def _detect_device() -> str:
     """cuda → mps → cpu, picked once at start time."""
     try:
         import torch
+
         if torch.cuda.is_available():
             return "cuda"
         if torch.backends.mps.is_available():
@@ -121,6 +118,7 @@ def _resolve_policy_path(policy_ref: str) -> str:
     if not m:
         raise ValueError(f"Unrecognised policy ref: {policy_ref!r}")
     from huggingface_hub import snapshot_download
+
     repo_id, step_dir = m.group("repo"), m.group("step_dir")
     local_root = snapshot_download(
         repo_id=repo_id,
@@ -130,41 +128,48 @@ def _resolve_policy_path(policy_ref: str) -> str:
     return str(Path(local_root) / "checkpoints" / step_dir / "pretrained_model")
 
 
-def _format_cameras_arg(cameras: Dict[str, Dict[str, Any]]) -> str:
+def _format_cameras_arg(cameras: dict[str, dict[str, Any]]) -> str:
     """Convert {name: {type, camera_index, width, height, fps}} into
     lerobot's CLI dict syntax. The frontend key `camera_index` is
     remapped to lerobot's `index_or_path`."""
     parts = []
     for name, cfg in cameras.items():
         remapped = {
-            ("index_or_path" if k == "camera_index" else k): v
-            for k, v in cfg.items()
-            if v is not None
+            ("index_or_path" if k == "camera_index" else k): v for k, v in cfg.items() if v is not None
         }
         body = ", ".join(f"{k}: {v}" for k, v in remapped.items())
         parts.append(f"{name}: {{{body}}}")
     return "{" + ", ".join(parts) + "}"
 
 
-def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
+def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     """Start a one-shot rollout subprocess. Returns a dict — the route
     layer turns it into a JSON response or HTTPException as appropriate."""
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
 
     # Mutex with teleop and recording: all three drive the same serial bus.
-    from .teleoperating import teleoperation_active
-    from .recording import recording_active
+    from .record import recording_active
+    from .teleoperate import teleoperation_active
 
     if teleoperation_active:
-        return {"success": False, "status_code": 409,
-                "message": "Teleoperation is currently active. Stop it first."}
+        return {
+            "success": False,
+            "status_code": 409,
+            "message": "Teleoperation is currently active. Stop it first.",
+        }
     if recording_active:
-        return {"success": False, "status_code": 409,
-                "message": "Recording is currently active. Stop it first."}
+        return {
+            "success": False,
+            "status_code": 409,
+            "message": "Recording is currently active. Stop it first.",
+        }
     if inference_active:
-        return {"success": False, "status_code": 409,
-                "message": "Inference is already active. Stop it first."}
+        return {
+            "success": False,
+            "status_code": 409,
+            "message": "Inference is already active. Stop it first.",
+        }
 
     try:
         # `setup_follower_calibration_file` returns the basename without the
@@ -175,7 +180,9 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
         policy_path = _resolve_policy_path(request.policy_ref)
 
         cmd = [
-            "python", "-m", "lerobot.scripts.lerobot_rollout",
+            "python",
+            "-m",
+            "lerobot.scripts.lerobot_rollout",
             "--strategy.type=base",
             f"--policy.path={policy_path}",
             f"--policy.device={_detect_device()}",
@@ -223,8 +230,7 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
         ).start()
     except Exception as exc:
         logger.exception("Failed to start inference")
-        return {"success": False, "status_code": 500,
-                "message": f"Failed to start inference: {exc}"}
+        return {"success": False, "status_code": 500, "message": f"Failed to start inference: {exc}"}
 
     inference_active = True
     _inference_proc = proc
@@ -239,7 +245,7 @@ def handle_start_inference(request: InferenceRequest) -> Dict[str, Any]:
     return {"success": True, "message": "Inference started", "log_path": str(log_path)}
 
 
-def handle_stop_inference() -> Dict[str, Any]:
+def handle_stop_inference() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
     if not inference_active or _inference_proc is None:
@@ -263,7 +269,7 @@ def handle_stop_inference() -> Dict[str, Any]:
     return {"success": True, "message": "Inference stopped"}
 
 
-def handle_inference_status() -> Dict[str, Any]:
+def handle_inference_status() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
     # If the subprocess died on its own, finalize state lazily.
@@ -291,11 +297,7 @@ def handle_inference_status() -> Dict[str, Any]:
             "elapsed_s": 0,
         }
     elapsed = (time.time() - _inference_started_at) if _inference_started_at else 0
-    rollout_elapsed = (
-        time.time() - _inference_rollout_started_at
-        if _inference_rollout_started_at
-        else 0
-    )
+    rollout_elapsed = time.time() - _inference_rollout_started_at if _inference_rollout_started_at else 0
     return {
         "inference_active": inference_active,
         "started_at": _inference_started_at,

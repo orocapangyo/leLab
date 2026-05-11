@@ -12,79 +12,94 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-import os
-import logging
-import glob
 import asyncio
-from typing import List, Dict, Any, Optional
-import threading
+import contextlib
+import glob
+import logging
+import os
 import queue
+import threading
 import time
 from pathlib import Path
-from pydantic import BaseModel
-from .utils import config
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from huggingface_hub import HfApi
+from pydantic import BaseModel
+
+from . import datasets as dataset_browser
+
+# Import our custom calibration functionality
+from .calibrate import CalibrationRequest, calibration_manager
+from .jobs import (
+    JobAlreadyRunningError,
+    JobNotFoundError,
+    JobNotRunningError,
+    JobTarget,
+    job_registry,
+)
 
 # Import our custom recording functionality
 from .record import (
+    DatasetInfoRequest,
     RecordingRequest,
     UploadRequest,
-    DatasetInfoRequest,
+    handle_delete_dataset,
+    handle_exit_early,
+    handle_get_dataset_info,
+    handle_recording_status,
+    handle_rerecord_episode,
     handle_start_recording,
     handle_stop_recording,
-    handle_exit_early,
-    handle_rerecord_episode,
-    handle_recording_status,
     handle_upload_dataset,
-    handle_get_dataset_info,
-    handle_delete_dataset,
+)
+from .rollout import (
+    InferenceRequest,
+    handle_inference_status,
+    handle_start_inference,
+    handle_stop_inference,
 )
 
 # Import our custom teleoperation functionality
 from .teleoperate import (
     TeleoperateRequest,
+    handle_get_joint_positions,
     handle_start_teleoperation,
     handle_stop_teleoperation,
     handle_teleoperation_status,
-    handle_get_joint_positions,
 )
-
-from .rollout import (
-    InferenceRequest,
-    handle_start_inference,
-    handle_stop_inference,
-    handle_inference_status,
-)
-
-# Import our custom calibration functionality
-from .calibrate import CalibrationRequest, calibration_manager
 
 # Training is now job-based; see app/jobs.py.
 from .train import TrainingRequest
-from .jobs import (
-    job_registry,
-    JobAlreadyRunningError,
-    JobNotFoundError,
-    JobNotRunningError,
-    JobTarget,
+from .utils import config
+from .utils.config import (
+    FOLLOWER_CONFIG_PATH,
+    LEADER_CONFIG_PATH,
+    delete_robot_record,
+    detect_port_after_disconnect,
+    find_available_ports,
+    find_robot_port,
+    get_default_robot_port,
+    get_robot_record,
+    get_saved_robot_port,
+    is_robot_record_clean,
+    is_valid_robot_name,
+    list_robot_records,
+    save_robot_port,
+    save_robot_record,
 )
-
+from .utils.hf_auth import cached_whoami, handle_hf_auth_status, handle_hf_login
 from .utils.system import (
     handle_get_training_extra,
+    handle_get_wandb_extra,
     handle_install_training_extra,
     handle_install_training_extra_status,
-    handle_get_wandb_extra,
     handle_install_wandb_extra,
     handle_install_wandb_extra_status,
 )
-
-from .utils.hf_auth import cached_whoami, handle_hf_auth_status, handle_hf_login
-from . import datasets as dataset_browser
-
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -93,8 +108,9 @@ logger = logging.getLogger(__name__)
 
 class StartTrainingBody(BaseModel):
     """Wrapping body for POST /jobs/training. Adds optional target spec."""
+
     config: TrainingRequest
-    target: Optional[JobTarget] = None
+    target: JobTarget | None = None
 
     @classmethod
     def from_legacy(cls, raw: dict) -> "StartTrainingBody":
@@ -112,7 +128,7 @@ _flavors_cache: dict = {"data": None, "fetched_at": 0.0}
 _FLAVOR_CACHE_TTL_SECONDS = 300.0
 
 # Global variables for WebSocket connections
-connected_websockets: List[WebSocket] = []
+connected_websockets: list[WebSocket] = []
 
 
 app = FastAPI()
@@ -132,30 +148,10 @@ FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 LEROBOT_PATH = str(Path(__file__).parent.parent.parent.parent)
 logger.info(f"LeRobot path: {LEROBOT_PATH}")
 
-# Import shared configuration constants
-from .utils.config import (
-    CALIBRATION_BASE_PATH_TELEOP,
-    CALIBRATION_BASE_PATH_ROBOTS,
-    LEADER_CONFIG_PATH,
-    FOLLOWER_CONFIG_PATH,
-    find_available_ports,
-    find_robot_port,
-    detect_port_after_disconnect,
-    save_robot_port,
-    get_saved_robot_port,
-    get_default_robot_port,
-    save_robot_record,
-    get_robot_record,
-    list_robot_records,
-    delete_robot_record,
-    is_robot_record_clean,
-    is_valid_robot_name,
-)
-
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
         self.broadcast_queue = queue.Queue()
         self.broadcast_thread = None
         self.is_running = False
@@ -163,9 +159,7 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        logger.info(
-            f"WebSocket connected. Total connections: {len(self.active_connections)}"
-        )
+        logger.info(f"WebSocket connected. Total connections: {len(self.active_connections)}")
 
         # Start broadcast thread if not running
         if not self.is_running:
@@ -174,9 +168,7 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
-            logger.info(
-                f"WebSocket disconnected. Total connections: {len(self.active_connections)}"
-            )
+            logger.info(f"WebSocket disconnected. Total connections: {len(self.active_connections)}")
 
         # Stop broadcast thread if no connections
         if not self.active_connections and self.is_running:
@@ -188,9 +180,7 @@ class ConnectionManager:
             return
 
         self.is_running = True
-        self.broadcast_thread = threading.Thread(
-            target=self._broadcast_worker, daemon=True
-        )
+        self.broadcast_thread = threading.Thread(target=self._broadcast_worker, daemon=True)
         self.broadcast_thread.start()
         logger.info("📡 Broadcast thread started")
 
@@ -229,7 +219,7 @@ class ConnectionManager:
         finally:
             loop.close()
 
-    async def _send_to_all_connections(self, data: Dict[str, Any]):
+    async def _send_to_all_connections(self, data: dict[str, Any]):
         """Send data to all active WebSocket connections"""
         if not self.active_connections:
             return
@@ -246,7 +236,7 @@ class ConnectionManager:
         for connection in disconnected:
             self.disconnect(connection)
 
-    def broadcast_joint_data_sync(self, data: Dict[str, Any]):
+    def broadcast_joint_data_sync(self, data: dict[str, Any]):
         """Thread-safe method to queue data for broadcasting"""
         if self.is_running and self.active_connections:
             try:
@@ -261,14 +251,8 @@ manager = ConnectionManager()
 @app.get("/get-configs")
 def get_configs():
     # Get all available calibration configs
-    leader_configs = [
-        os.path.basename(f)
-        for f in glob.glob(os.path.join(LEADER_CONFIG_PATH, "*.json"))
-    ]
-    follower_configs = [
-        os.path.basename(f)
-        for f in glob.glob(os.path.join(FOLLOWER_CONFIG_PATH, "*.json"))
-    ]
+    leader_configs = [os.path.basename(f) for f in glob.glob(os.path.join(LEADER_CONFIG_PATH, "*.json"))]
+    follower_configs = [os.path.basename(f) for f in glob.glob(os.path.join(FOLLOWER_CONFIG_PATH, "*.json"))]
 
     return {"leader_configs": leader_configs, "follower_configs": follower_configs}
 
@@ -346,7 +330,7 @@ def hf_auth_login(body: HfLoginBody):
     try:
         return handle_hf_login(body.token)
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 @app.get("/datasets")
@@ -377,7 +361,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
                 # Handle any incoming messages if needed
                 logger.debug(f"Received WebSocket message: {data}")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # No message received, continue
                 pass
             except WebSocketDisconnect:
@@ -456,10 +440,10 @@ async def create_training_job(req: Request):
     try:
         record = job_registry.start(body.config, body.target)
     except JobAlreadyRunningError as exc:
-        raise HTTPException(status_code=409, detail=f"Job already running: {exc}")
+        raise HTTPException(status_code=409, detail=f"Job already running: {exc}") from exc
     except ValueError as exc:
         # e.g. "flavor is required when runner is hf_cloud"
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record
 
 
@@ -505,11 +489,13 @@ def list_hub_jobs():
                 if m.id in seen_models:
                     continue
                 seen_models.add(m.id)
-                models.append({
-                    "repo_id": m.id,
-                    "last_modified": m.last_modified.isoformat() if m.last_modified else None,
-                    "private": bool(getattr(m, "private", False)),
-                })
+                models.append(
+                    {
+                        "repo_id": m.id,
+                        "last_modified": m.last_modified.isoformat() if m.last_modified else None,
+                        "private": bool(getattr(m, "private", False)),
+                    }
+                )
         except Exception as exc:
             logger.warning("list_models(%s) failed: %s", author, exc)
     models.sort(key=lambda m: m["last_modified"] or "", reverse=True)
@@ -523,11 +509,7 @@ def list_hub_jobs():
                 "docker_image": ji.docker_image,
                 "space_id": ji.space_id,
                 "flavor": ji.flavor,
-                "status": (
-                    {"stage": ji.status.stage, "message": ji.status.message}
-                    if ji.status
-                    else None
-                ),
+                "status": ({"stage": ji.status.stage, "message": ji.status.message} if ji.status else None),
                 "owner": ji.owner.name if ji.owner else None,
                 "url": ji.url,
             }
@@ -541,16 +523,16 @@ def list_hub_jobs():
 def get_job(job_id: str):
     try:
         return job_registry.get(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
 
 
 @app.get("/jobs/{job_id}/logs")
 def get_job_logs(job_id: str):
     try:
         logs = job_registry.drain_logs(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
     return {"logs": logs}
 
 
@@ -560,13 +542,11 @@ def get_job_log_file(job_id: str):
     so the next /logs poll returns only lines that arrived after this call."""
     try:
         logs = job_registry.read_persisted_logs(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
     # Best-effort drain so the frontend doesn't double-display.
-    try:
+    with contextlib.suppress(JobNotFoundError):
         job_registry.drain_logs(job_id)
-    except JobNotFoundError:
-        pass
     return {"logs": logs}
 
 
@@ -575,8 +555,8 @@ def get_job_checkpoints(job_id: str):
     """List the checkpoints saved for this job, ascending by step."""
     try:
         return {"checkpoints": job_registry.list_checkpoints(job_id)}
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
 
 
 @app.get("/jobs/{job_id}/checkpoints/{step}/policy-config")
@@ -585,32 +565,32 @@ def get_checkpoint_policy_config(job_id: str, step: int):
     policy_type, image_features (per-camera height/width), and requires_task."""
     try:
         return job_registry.get_policy_config_summary(job_id, step)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/jobs/{job_id}/stop")
 def stop_job(job_id: str):
     try:
         return job_registry.stop(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-    except JobNotRunningError:
-        raise HTTPException(status_code=409, detail=f"Job {job_id!r} is not running")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
+    except JobNotRunningError as exc:
+        raise HTTPException(status_code=409, detail=f"Job {job_id!r} is not running") from exc
 
 
 @app.delete("/jobs/{job_id}", status_code=204)
 def delete_job(job_id: str):
     try:
         job_registry.delete(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-    except JobNotRunningError:
-        raise HTTPException(status_code=409, detail=f"Job {job_id!r} is running; stop it first")
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found") from exc
+    except JobNotRunningError as exc:
+        raise HTTPException(status_code=409, detail=f"Job {job_id!r} is running; stop it first") from exc
 
 
 @app.get("/jobs/runners/hardware")
@@ -628,10 +608,7 @@ def get_runners_hardware():
     api = HfApi()
 
     now = time.time()
-    if (
-        _flavors_cache["data"] is None
-        or now - _flavors_cache["fetched_at"] > _FLAVOR_CACHE_TTL_SECONDS
-    ):
+    if _flavors_cache["data"] is None or now - _flavors_cache["fetched_at"] > _FLAVOR_CACHE_TTL_SECONDS:
         try:
             hw_list = api.list_jobs_hardware()
         except Exception as exc:
@@ -805,6 +782,7 @@ def delete_calibration_config(device_type: str, config_name: str):
 # PORT DETECTION ENDPOINTS
 # ============================================================================
 
+
 @app.get("/available-ports")
 def get_available_ports():
     """Get all available serial ports"""
@@ -816,7 +794,7 @@ def get_available_ports():
         return {"status": "error", "message": str(e)}
 
 
-def _avfoundation_cameras_in_cv2_order() -> List[Dict[str, Any]]:
+def _avfoundation_cameras_in_cv2_order() -> list[dict[str, Any]]:
     """Return AVFoundation cameras in the same order cv2 opens them.
 
     OpenCV's macOS AVFoundation backend opens
@@ -834,10 +812,8 @@ def _avfoundation_cameras_in_cv2_order() -> List[Dict[str, Any]]:
         logger.warning("PyObjC not available; cannot enumerate AVFoundation cameras by name")
         return []
 
-    NSBundle.bundleWithPath_(
-        "/System/Library/Frameworks/AVFoundation.framework"
-    ).load()
-    AVCaptureDevice = objc.lookUpClass("AVCaptureDevice")
+    NSBundle.bundleWithPath_("/System/Library/Frameworks/AVFoundation.framework").load()
+    AVCaptureDevice = objc.lookUpClass("AVCaptureDevice")  # noqa: N806 — ObjC class name
 
     # AVMediaTypeVideo = "vide", AVMediaTypeMuxed = "muxx" (CoreMedia 4-char codes).
     video = list(AVCaptureDevice.devicesWithMediaType_("vide") or [])
@@ -866,6 +842,7 @@ def get_available_cameras():
     """
     try:
         import platform
+
         system = platform.system()
 
         if system == "Darwin":
@@ -876,10 +853,8 @@ def get_available_cameras():
 
         # Linux / others: fall back to the cv2 probe (no friendly names).
         import cv2
-        if system == "Linux":
-            backend = cv2.CAP_V4L2
-        else:
-            backend = cv2.CAP_ANY
+
+        backend = cv2.CAP_V4L2 if system == "Linux" else cv2.CAP_ANY
 
         cameras = []
         for i in range(10):
@@ -887,11 +862,13 @@ def get_available_cameras():
             if not cap.isOpened():
                 cap.release()
                 continue
-            cameras.append({
-                "index": i,
-                "name": f"Camera {i}",
-                "available": True,
-            })
+            cameras.append(
+                {
+                    "index": i,
+                    "name": f"Camera {i}",
+                    "available": True,
+                }
+            )
             cap.release()
         return {"status": "success", "cameras": cameras}
     except ImportError:
@@ -932,10 +909,10 @@ def save_robot_port_endpoint(data: dict):
     try:
         robot_type = data.get("robot_type")
         port = data.get("port")
-        
+
         if not robot_type or not port:
             return {"status": "error", "message": "robot_type and port are required"}
-        
+
         save_robot_port(robot_type, port)
         return {"status": "success", "message": f"Port {port} saved for {robot_type}"}
     except Exception as e:
@@ -949,11 +926,7 @@ def get_robot_port(robot_type: str):
     try:
         saved_port = get_saved_robot_port(robot_type)
         default_port = get_default_robot_port(robot_type)
-        return {
-            "status": "success", 
-            "saved_port": saved_port,
-            "default_port": default_port
-        }
+        return {"status": "success", "saved_port": saved_port, "default_port": default_port}
     except Exception as e:
         logger.error(f"Error getting robot port: {e}")
         return {"status": "error", "message": str(e)}
@@ -965,17 +938,17 @@ def save_robot_config_endpoint(data: dict):
     try:
         robot_type = data.get("robot_type")
         config_name = data.get("config_name")
-        
+
         if not robot_type or not config_name:
             return {"status": "error", "message": "Missing robot_type or config_name"}
-            
+
         success = config.save_robot_config(robot_type, config_name)
-        
+
         if success:
             return {"status": "success", "message": f"Configuration saved for {robot_type}"}
         else:
             return {"status": "error", "message": "Failed to save configuration"}
-            
+
     except Exception as e:
         logger.error(f"Error saving robot configuration: {e}")
         return {"status": "error", "message": str(e)}
@@ -989,15 +962,11 @@ def get_robot_config(robot_type: str, available_configs: str = ""):
         available_configs_list = []
         if available_configs:
             available_configs_list = [cfg.strip() for cfg in available_configs.split(",") if cfg.strip()]
-        
+
         saved_config = config.get_saved_robot_config(robot_type)
         default_config = config.get_default_robot_config(robot_type, available_configs_list)
-        
-        return {
-            "status": "success", 
-            "saved_config": saved_config,
-            "default_config": default_config
-        }
+
+        return {"status": "success", "saved_config": saved_config, "default_config": default_config}
     except Exception as e:
         logger.error(f"Error getting robot configuration: {e}")
         return {"status": "error", "message": str(e)}
@@ -1005,6 +974,7 @@ def get_robot_config(robot_type: str, available_configs: str = ""):
 
 # ============================================================================
 # Robot config records (named robots)
+
 
 def _record_with_clean(record: dict) -> dict:
     """Attach `is_clean` to a record for API responses."""
@@ -1049,7 +1019,10 @@ def upsert_robot(name: str, data: dict, create: bool = False):
     try:
         if create:
             if get_robot_record(name) is not None:
-                return JSONResponse(status_code=409, content={"status": "error", "message": "A robot with this name already exists"})
+                return JSONResponse(
+                    status_code=409,
+                    content={"status": "error", "message": "A robot with this name already exists"},
+                )
             save_robot_record(name, data or {}, allow_create=True)
         else:
             save_robot_record(name, data or {}, allow_create=False)
@@ -1089,6 +1062,5 @@ if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:
     logger.warning(
-        f"frontend/dist not found at {FRONTEND_DIST}; "
-        "run `npm run build` in frontend/ or use `lelab --dev`."
+        f"frontend/dist not found at {FRONTEND_DIST}; run `npm run build` in frontend/ or use `lelab --dev`."
     )

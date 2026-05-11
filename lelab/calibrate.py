@@ -23,21 +23,19 @@ import logging
 import threading
 import time
 import traceback
-from dataclasses import asdict, dataclass
-from typing import Optional, Dict, Any
+from dataclasses import dataclass
+from typing import Any
 
+from lerobot.motors import MotorCalibration
+from lerobot.motors.feetech import OperatingMode
 from lerobot.robots import (
     Robot,
-    RobotConfig,
     make_robot_from_config,
 )
 from lerobot.teleoperators import (
     Teleoperator,
-    TeleoperatorConfig,
     make_teleoperator_from_config,
 )
-from lerobot.motors import MotorCalibration
-from lerobot.motors.feetech import OperatingMode
 from lerobot.utils.utils import init_logging
 
 logger = logging.getLogger(__name__)
@@ -46,24 +44,26 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CalibrationStatus:
     """Status information for calibration process"""
+
     calibration_active: bool = False
     status: str = "idle"  # "idle", "connecting", "recording", "completed", "error", "stopping"
-    device_type: Optional[str] = None
-    error: Optional[str] = None
+    device_type: str | None = None
+    error: str | None = None
     message: str = ""
     step: int = 0  # Current calibration step
     total_steps: int = 1  # Total number of calibration steps
-    current_positions: Dict[str, float] = None
-    recorded_ranges: Dict[str, Dict[str, float]] = None  # {motor: {min: val, max: val, current: val}}
+    current_positions: dict[str, float] = None
+    recorded_ranges: dict[str, dict[str, float]] = None  # {motor: {min: val, max: val, current: val}}
 
 
 @dataclass
 class CalibrationRequest:
     """Request parameters for starting calibration"""
+
     device_type: str  # "robot" or "teleop"
     port: str
     config_file: str
-    robot_name: Optional[str] = None  # When set, write port + config back into the robot record on success
+    robot_name: str | None = None  # When set, write port + config back into the robot record on success
 
 
 class CalibrationManager:
@@ -71,8 +71,8 @@ class CalibrationManager:
 
     def __init__(self):
         self.status = CalibrationStatus()
-        self.device: Optional[Robot | Teleoperator] = None
-        self.calibration_thread: Optional[threading.Thread] = None
+        self.device: Robot | Teleoperator | None = None
+        self.calibration_thread: threading.Thread | None = None
         self.stop_calibration = False
         self._status_lock = threading.Lock()
         self._step_complete = threading.Event()
@@ -81,7 +81,7 @@ class CalibrationManager:
         self._mins = {}
         self._maxes = {}
         self._homing_offsets = {}
-        self._current_request: Optional[CalibrationRequest] = None
+        self._current_request: CalibrationRequest | None = None
 
         # Initialize logging
         init_logging()
@@ -104,21 +104,19 @@ class CalibrationManager:
                                 continue
                             else:
                                 raise read_error
-                    
+
                     if positions:
                         # Update recorded ranges
                         if not self.status.recorded_ranges:
                             self.status.recorded_ranges = {}
-                        
+
                         for motor, pos in positions.items():
                             # Filter out invalid readings (0, negative, or extreme values)
                             if pos <= 0 or pos >= 5000:
                                 continue  # Skip invalid readings
-                                
+
                             if motor not in self.status.recorded_ranges:
-                                self.status.recorded_ranges[motor] = {
-                                    "min": pos, "max": pos, "current": pos
-                                }
+                                self.status.recorded_ranges[motor] = {"min": pos, "max": pos, "current": pos}
                             else:
                                 self.status.recorded_ranges[motor]["current"] = pos
                                 self.status.recorded_ranges[motor]["min"] = min(
@@ -133,7 +131,7 @@ class CalibrationManager:
                         logger.debug(f"Port busy during position read: {e}")
                     else:
                         logger.warning(f"Failed to read positions: {e}")
-            
+
             return self.status
 
     def _update_status(self, **kwargs):
@@ -143,7 +141,7 @@ class CalibrationManager:
                 if hasattr(self.status, key):
                     setattr(self.status, key, value)
 
-    def start_calibration(self, request: CalibrationRequest) -> Dict[str, Any]:
+    def start_calibration(self, request: CalibrationRequest) -> dict[str, Any]:
         """Start calibration process"""
         try:
             if self.status.calibration_active:
@@ -154,7 +152,7 @@ class CalibrationManager:
             self._mins = {}
             self._maxes = {}
             self._homing_offsets = {}
-            
+
             self._update_status(
                 calibration_active=True,
                 status="connecting",
@@ -163,15 +161,13 @@ class CalibrationManager:
                 message=f"Starting calibration for {request.device_type}",
                 step=0,
                 current_positions=None,
-                recorded_ranges=None
+                recorded_ranges=None,
             )
             self._current_request = request
 
             # Start calibration in a separate thread
             self.calibration_thread = threading.Thread(
-                target=self._calibration_worker,
-                args=(request,),
-                daemon=True
+                target=self._calibration_worker, args=(request,), daemon=True
             )
             self.stop_calibration = False
             self._step_complete.clear()
@@ -182,14 +178,11 @@ class CalibrationManager:
         except Exception as e:
             logger.error(f"Error starting calibration: {e}")
             self._update_status(
-                calibration_active=False,
-                status="error",
-                error=str(e),
-                message="Failed to start calibration"
+                calibration_active=False, status="error", error=str(e), message="Failed to start calibration"
             )
             return {"success": False, "message": str(e)}
 
-    def complete_step(self) -> Dict[str, Any]:
+    def complete_step(self) -> dict[str, Any]:
         """Complete the current calibration step"""
         try:
             if not self.status.calibration_active:
@@ -208,7 +201,7 @@ class CalibrationManager:
             logger.error(f"Error completing step: {e}")
             return {"success": False, "message": str(e)}
 
-    def stop_calibration_process(self) -> Dict[str, Any]:
+    def stop_calibration_process(self) -> dict[str, Any]:
         """Stop calibration process"""
         try:
             if not self.status.calibration_active:
@@ -218,11 +211,8 @@ class CalibrationManager:
             self.stop_calibration = True
             self._recording_active = False
             self._step_complete.set()  # Unblock any waiting step
-            
-            self._update_status(
-                status="stopping",
-                message="Stopping calibration..."
-            )
+
+            self._update_status(status="stopping", message="Stopping calibration...")
 
             # Wait for thread to finish
             if self.calibration_thread and self.calibration_thread.is_alive():
@@ -231,10 +221,10 @@ class CalibrationManager:
             # Ensure cleanup is called if thread didn't finish properly
             if self.calibration_thread and self.calibration_thread.is_alive():
                 logger.warning("Calibration thread did not finish within timeout, forcing cleanup")
-            
+
             # Force cleanup and finish
             self._cleanup_and_finish("Calibration stopped", status="idle")
-            
+
             logger.info("Calibration stop completed")
             return {"success": True, "message": "Calibration stopped"}
 
@@ -248,27 +238,20 @@ class CalibrationManager:
         """Worker thread for calibration process"""
         try:
             logger.info(f"Starting calibration worker for {request.device_type}")
-            
+
             # Create device configuration
             if request.device_type == "robot":
                 from lerobot.robots.so_follower import SO101FollowerConfig
-                config = SO101FollowerConfig(
-                    port=request.port,
-                    id=request.config_file
-                )
+
+                config = SO101FollowerConfig(port=request.port, id=request.config_file)
             elif request.device_type == "teleop":
                 from lerobot.teleoperators.so_leader import SO101LeaderConfig
-                config = SO101LeaderConfig(
-                    port=request.port,
-                    id=request.config_file
-                )
+
+                config = SO101LeaderConfig(port=request.port, id=request.config_file)
             else:
                 raise ValueError(f"Unknown device type: {request.device_type}")
 
-            self._update_status(
-                status="connecting",
-                message="Connecting to device..."
-            )
+            self._update_status(status="connecting", message="Connecting to device...")
 
             # Create and connect device
             if request.device_type == "robot":
@@ -315,7 +298,9 @@ class CalibrationManager:
             # Ensure we always clean up and reset the active flag
             logger.info("Calibration worker thread finishing")
             if self.status.calibration_active:
-                logger.warning("Worker thread ending but calibration still marked as active - forcing cleanup")
+                logger.warning(
+                    "Worker thread ending but calibration still marked as active - forcing cleanup"
+                )
                 self._cleanup_and_finish("Calibration stopped", status="idle")
 
     def _step_homing(self):
@@ -340,7 +325,7 @@ class CalibrationManager:
     def _step_range_recording(self):
         """Record range of motion as the user moves all joints."""
         logger.info("Starting range recording step")
-        
+
         # Initialize range tracking with retry and validation
         self._start_positions = {}
         for attempt in range(5):  # Try multiple times to get valid initial positions
@@ -351,7 +336,7 @@ class CalibrationManager:
                 for motor, pos in positions.items():
                     if pos > 0 and pos < 5000:  # Valid range
                         valid_positions[motor] = pos
-                
+
                 if len(valid_positions) == len(positions):  # All positions are valid
                     self._start_positions = valid_positions
                     break
@@ -361,23 +346,25 @@ class CalibrationManager:
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1}: Failed to read initial positions: {e}")
                 time.sleep(0.1)
-        
+
         if not self._start_positions:
             raise RuntimeError("Could not get valid initial positions after multiple attempts")
-        
+
         logger.info(f"Starting positions for range recording: {self._start_positions}")
-        
+
         self._mins = self._start_positions.copy()
         self._maxes = self._start_positions.copy()
         logger.info(f"Initialized mins: {self._mins}")
         logger.info(f"Initialized maxes: {self._maxes}")
-        
+
         self._update_status(
             status="recording",
             step=1,
             message="Move ALL joints through their FULL ranges of motion - from minimum to maximum positions. Ensure each joint moves significantly from its starting position.",
-            recorded_ranges={motor: {"min": pos, "max": pos, "current": pos} 
-                           for motor, pos in self._start_positions.items()}
+            recorded_ranges={
+                motor: {"min": pos, "max": pos, "current": pos}
+                for motor, pos in self._start_positions.items()
+            },
         )
 
         self._recording_active = True
@@ -397,7 +384,7 @@ class CalibrationManager:
                             continue
                         else:
                             raise read_error  # Re-raise if not port contention or final attempt
-                
+
                 if positions:
                     # Validate the readings - filter out invalid/zero values
                     valid_positions = {}
@@ -407,14 +394,14 @@ class CalibrationManager:
                             valid_positions[motor] = pos
                         else:
                             logger.debug(f"Filtered invalid position for {motor}: {pos}")
-                    
+
                     # Only update if we have valid readings
                     if valid_positions:
                         for motor, pos in valid_positions.items():
                             if motor in self._mins:
                                 self._mins[motor] = min(self._mins[motor], pos)
                                 self._maxes[motor] = max(self._maxes[motor], pos)
-                
+
                 time.sleep(0.05)  # 20Hz update rate
             except Exception as e:
                 if "Port is in use" in str(e):
@@ -427,26 +414,30 @@ class CalibrationManager:
         if self.stop_calibration:
             logger.info("Range recording step cancelled due to stop request")
             return
-                
+
         # Log the final recorded ranges for debugging
         logger.info("Final recorded ranges:")
-        for motor in self._mins.keys():
-            logger.info(f"  {motor}: min={self._mins[motor]}, max={self._maxes[motor]}, range={self._maxes[motor] - self._mins[motor]}")
+        for motor in self._mins:
+            logger.info(
+                f"  {motor}: min={self._mins[motor]}, max={self._maxes[motor]}, range={self._maxes[motor] - self._mins[motor]}"
+            )
 
         # Validate ranges
-        same_min_max = [motor for motor in self._mins.keys() if self._mins[motor] == self._maxes[motor]]
+        same_min_max = [motor for motor in self._mins if self._mins[motor] == self._maxes[motor]]
         if same_min_max:
             raise ValueError(f"Some motors have the same min and max values: {same_min_max}")
 
         # Check for insufficient range movement (less than 100 motor steps)
         insufficient_range = []
-        for motor in self._mins.keys():
+        for motor in self._mins:
             range_diff = self._maxes[motor] - self._mins[motor]
             if range_diff < 100:  # Less than 100 motor steps seems insufficient
                 insufficient_range.append(f"{motor}: {range_diff}")
-        
+
         if insufficient_range:
-            logger.warning(f"Some motors may not have been moved through sufficient range: {insufficient_range}")
+            logger.warning(
+                f"Some motors may not have been moved through sufficient range: {insufficient_range}"
+            )
             logger.warning("Consider moving all joints through their full range of motion during calibration")
 
         self._step_complete.clear()
@@ -471,17 +462,19 @@ class CalibrationManager:
                 range_min=self._mins[motor],
                 range_max=self._maxes[motor],
             )
-            logger.info(f"Calibration for {motor}: "
-                       f"ID={m.id}, "
-                       f"homing_offset={self._homing_offsets[motor]}, "
-                       f"range_min={self._mins[motor]}, "
-                       f"range_max={self._maxes[motor]}")
+            logger.info(
+                f"Calibration for {motor}: "
+                f"ID={m.id}, "
+                f"homing_offset={self._homing_offsets[motor]}, "
+                f"range_min={self._mins[motor]}, "
+                f"range_max={self._maxes[motor]}"
+            )
 
         # Write and save calibration
         self.device.calibration = calibration
         self.device.bus.write_calibration(calibration)
         self.device._save_calibration()
-        
+
         logger.info(f"Calibration saved to {self.device.calibration_fpath}")
 
         # Robot-record write-back: if this calibration was launched from a tile,
@@ -489,6 +482,7 @@ class CalibrationManager:
         request = self._current_request
         if request is not None and request.robot_name:
             from .config import save_robot_record
+
             if request.device_type == "teleop":
                 patch = {"leader_port": request.port, "leader_config": f"{request.config_file}.json"}
             elif request.device_type == "robot":
@@ -505,11 +499,7 @@ class CalibrationManager:
         """Clean up and finish calibration"""
         self._cleanup_device()
         self._recording_active = False
-        self._update_status(
-            calibration_active=False,
-            status=status,
-            message=message
-        )
+        self._update_status(calibration_active=False, status=status, message=message)
 
     def _cleanup_device(self):
         """Clean up device connection"""
@@ -523,4 +513,4 @@ class CalibrationManager:
 
 
 # Global calibration manager instance
-calibration_manager = CalibrationManager() 
+calibration_manager = CalibrationManager()
