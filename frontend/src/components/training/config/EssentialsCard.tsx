@@ -137,6 +137,7 @@ const EssentialsCard: React.FC<EssentialsCardProps> = ({ config, updateConfig, d
               id="wandb_enable"
               checked={config.wandb_enable}
               onCheckedChange={handleWandbToggle}
+              className="data-[state=checked]:bg-green-500"
             />
             <Label htmlFor="wandb_enable" className="text-slate-300">
               Enable Weights & Biases
