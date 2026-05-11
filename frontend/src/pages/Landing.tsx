@@ -237,7 +237,9 @@ const Landing = () => {
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex flex-col gap-2">
-              <h3 className="font-semibold text-lg text-left">Dataset</h3>
+              <h3 className="font-semibold text-lg text-left h-10 flex items-center">
+                Dataset
+              </h3>
               <DatasetPicker
                 datasets={datasets}
                 loading={datasetsLoading}
@@ -260,9 +262,9 @@ const Landing = () => {
               </DatasetPicker>
             </div>
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex flex-col gap-2">
-              <p className="text-gray-400 text-sm text-left">
-                Train a model on your datasets.
-              </p>
+              <h3 className="font-semibold text-lg text-left h-10 flex items-center">
+                Create a model
+              </h3>
               <Button
                 onClick={handleTrainingClick}
                 className="w-full bg-green-500 hover:bg-green-600 text-white"
