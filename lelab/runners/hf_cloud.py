@@ -388,27 +388,37 @@ class HfCloudJobRunner:
                 self._log_file = None
 
     def _finalize_terminal_status(self) -> None:
-        """One-shot resolve of the job's terminal stage after the log stream
-        ends. Idempotent — stop() may pre-set _terminal_status to CANCELED."""
+        """Resolve the job's terminal stage after the log stream ends.
+
+        HF Jobs can take several seconds to flip the platform-side stage
+        from RUNNING to a terminal value (COMPLETED/ERROR/CANCELED) after
+        the container exits, so we poll until we see a non-RUNNING stage
+        or hit the deadline. Idempotent — stop() pre-sets CANCELED so we
+        short-circuit."""
         if self._terminal_status is not None:
             return
         if self._hf_job_id is None:
             return
-        try:
-            info = self._api.inspect_job(job_id=self._hf_job_id)
-            status_obj = getattr(info, "status", None)
-            stage = getattr(status_obj, "stage", None) if status_obj is not None else None
-            stage_str = str(stage).upper() if stage is not None else "ERROR"
-            message = getattr(status_obj, "message", None)
-            if message:
-                self._terminal_message = str(message)
-        except Exception as exc:
-            # API unreachable at finalisation time: default to ERROR so the
-            # record doesn't stay stuck in "running". The persisted log file
-            # still records what happened.
-            logger.warning("inspect_job at finalisation failed for %s: %s", self._hf_job_id, exc)
-            stage_str = "ERROR"
-        self._terminal_status = stage_str
+        deadline = time.monotonic() + 60.0
+        stage_str: str | None = None
+        message: str | None = None
+        while time.monotonic() < deadline:
+            try:
+                info = self._api.inspect_job(job_id=self._hf_job_id)
+                status_obj = getattr(info, "status", None)
+                stage = getattr(status_obj, "stage", None) if status_obj is not None else None
+                if stage is not None:
+                    stage_str = str(stage).upper()
+                    message = getattr(status_obj, "message", None)
+                if stage_str and stage_str != "RUNNING":
+                    break
+            except Exception as exc:
+                logger.warning("inspect_job at finalisation failed for %s: %s", self._hf_job_id, exc)
+            if self._stop_event.wait(1.0):
+                break
+        if message:
+            self._terminal_message = str(message)
+        self._terminal_status = stage_str or "ERROR"
 
     def stop(self) -> None:
         if self._hf_job_id is None:
