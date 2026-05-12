@@ -425,6 +425,8 @@ class CalibrationManager:
                                 self._maxes[motor] = max(self._maxes[motor], pos)
 
                 time.sleep(0.05)  # 20Hz update rate
+            except CalibrationDiscontinuityError:
+                raise
             except Exception as e:
                 if "Port is in use" in str(e):
                     logger.debug(f"Port busy during position read: {e}")
