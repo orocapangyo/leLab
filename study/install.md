@@ -115,3 +115,11 @@ hf auth login
 # 로그인 확인
 hf auth whoami
 ```
+
+---
+
+## ❓ 자주 묻는 질문 (FAQ)
+
+### Q. LeLab을 사용하려면 LeRobot을 별도로 설치해야 하나요?
+**A. 아닙니다.** LeLab은 `lerobot` 패키지를 의존성으로 포함하고 있으므로, `uv pip install -e .` 명령어를 통해 LeLab을 설치할 때 **자동으로 `lerobot` 라이브러리가 함께 설치**됩니다. 사전에 개별적으로 `lerobot`을 설치하실 필요가 없습니다.
+
