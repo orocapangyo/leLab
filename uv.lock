@@ -544,6 +544,18 @@ wheels = [
 ]
 
 [[package]]
+name = "dynamixel-sdk"
+version = "3.8.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyserial" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/0a/e5234a2fb086cd8cd1d2a37b5b3b7b41f593676544d90c80fa97a8e63b7d/dynamixel_sdk-3.8.4.tar.gz", hash = "sha256:7177da5199230ff9732c7cb9e71a7d3cc4dbf90f4537ee7ea9566147954c7288", size = 16833, upload-time = "2025-09-12T00:09:29.514Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/80/a70f6b08b5e5a26f37638c49be96f5ec16a3b03b86932428f310aa1ae770/dynamixel_sdk-3.8.4-py3-none-any.whl", hash = "sha256:e5e837dad3a4cf497cd59fcd9d16396aec0013aa938e3f9c7cfba18e28b1828a", size = 24714, upload-time = "2025-09-12T00:09:28.616Z" },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1075,7 +1087,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
-    { name = "lerobot", extra = ["core-scripts", "feetech", "training"] },
+    { name = "lerobot", extra = ["core-scripts", "dynamixel", "feetech", "training"] },
     { name = "psutil" },
     { name = "pygrabber", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
@@ -1098,7 +1110,7 @@ test = [
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.12" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27" },
-    { name = "lerobot", extras = ["core-scripts", "feetech", "training"], git = "https://github.com/huggingface/lerobot.git?rev=v0.6.0" },
+    { name = "lerobot", extras = ["core-scripts", "feetech", "dynamixel", "training"], git = "https://github.com/huggingface/lerobot.git?rev=v0.6.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pygrabber", marker = "sys_platform == 'win32'", specifier = ">=0.2" },
@@ -1149,6 +1161,11 @@ core-scripts = [
     { name = "pyserial" },
     { name = "rerun-sdk" },
     { name = "torchcodec", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or sys_platform == 'win32'" },
+]
+dynamixel = [
+    { name = "deepdiff" },
+    { name = "dynamixel-sdk" },
+    { name = "pyserial" },
 ]
 feetech = [
     { name = "deepdiff" },
@@ -2095,8 +2112,8 @@ name = "pygrabber"
 version = "0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "comtypes" },
-    { name = "numpy" },
+    { name = "comtypes", marker = "sys_platform == 'win32'" },
+    { name = "numpy", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d4/24/e7e5efa1d915853f3f34cedf751cbee9d88bee47a41122d495ee95452dad/pygrabber-0.2.tar.gz", hash = "sha256:e584b119d4c9b9a8f339eb34d1fe7fdd16214a2bf5a1876171145caebdb9e413", size = 18487, upload-time = "2023-10-20T07:17:14.97Z" }
 wheels = [
