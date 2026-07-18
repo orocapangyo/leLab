@@ -12,6 +12,7 @@ export interface RobotRecord {
   follower_config: string;
   cameras: CameraConfig[];
   is_clean: boolean;
+  robot_type?: string;
 }
 
 const SELECTED_KEY = "lelab.selectedRobot";

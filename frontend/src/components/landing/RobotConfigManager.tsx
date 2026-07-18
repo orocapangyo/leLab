@@ -42,6 +42,7 @@ const RobotConfigManager: React.FC<RobotConfigManagerProps> = ({
           follower_port: robot.follower_port,
           leader_config: robot.leader_config,
           follower_config: robot.follower_config,
+          robot_type: robot.robot_type || "so101",
         }),
       });
       const data = await res.json();

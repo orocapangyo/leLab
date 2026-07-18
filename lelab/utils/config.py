@@ -31,6 +31,20 @@ CALIBRATION_BASE_PATH_ROBOTS = os.path.expanduser("~/.cache/huggingface/lerobot/
 LEADER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_TELEOP, "so_leader")
 FOLLOWER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_ROBOTS, "so_follower")
 
+
+def get_calibration_path(robot_type: str | None, side: Literal["leader", "follower"]) -> str:
+    """Get the directory where calibration configurations are stored for a given robot model."""
+    base_config_path = LEADER_CONFIG_PATH if side == "leader" else FOLLOWER_CONFIG_PATH
+    base = os.path.dirname(base_config_path)
+    model = (robot_type or "so101").lower().replace("-", "_")
+    if "so" in model:
+        folder = f"so_{side}"
+    elif "omx" in model:
+        folder = f"omx_{side}"
+    else:
+        folder = f"so_{side}"
+    return os.path.join(base, folder)
+
 # Define port storage path
 PORT_CONFIG_PATH = os.path.expanduser("~/.cache/huggingface/lerobot/ports")
 LEADER_PORT_FILE = os.path.join(PORT_CONFIG_PATH, "leader_port.txt")
@@ -85,15 +99,19 @@ def _config_file_for(robot_type: RobotSide) -> str:
     raise ValueError(f"robot_type must be 'leader' or 'follower', got {robot_type!r}")
 
 
-def setup_calibration_files(leader_config: str, follower_config: str):
+def setup_calibration_files(leader_config: str, follower_config: str, robot_type: str = "so101"):
     """Setup calibration files in the correct locations for teleoperation and recording"""
     # Extract config names from file paths (remove .json extension)
     leader_config_name = os.path.splitext(leader_config)[0]
     follower_config_name = os.path.splitext(follower_config)[0]
 
+    # Resolve dynamic configuration paths based on robot_type
+    leader_calib_path = get_calibration_path(robot_type, "leader")
+    follower_calib_path = get_calibration_path(robot_type, "follower")
+
     # Log the full paths to check if files exist
-    leader_config_full_path = os.path.join(LEADER_CONFIG_PATH, leader_config)
-    follower_config_full_path = os.path.join(FOLLOWER_CONFIG_PATH, follower_config)
+    leader_config_full_path = os.path.join(leader_calib_path, leader_config)
+    follower_config_full_path = os.path.join(follower_calib_path, follower_config)
 
     logger.info("Checking calibration files:")
     logger.info(f"Leader config path: {leader_config_full_path}")
@@ -102,14 +120,12 @@ def setup_calibration_files(leader_config: str, follower_config: str):
     logger.info(f"Follower config exists: {os.path.exists(follower_config_full_path)}")
 
     # Create calibration directories if they don't exist
-    leader_calibration_dir = LEADER_CONFIG_PATH
-    follower_calibration_dir = FOLLOWER_CONFIG_PATH
-    os.makedirs(leader_calibration_dir, exist_ok=True)
-    os.makedirs(follower_calibration_dir, exist_ok=True)
+    os.makedirs(leader_calib_path, exist_ok=True)
+    os.makedirs(follower_calib_path, exist_ok=True)
 
     # Copy calibration files to the correct locations if they're not already there
-    leader_target_path = os.path.join(leader_calibration_dir, f"{leader_config_name}.json")
-    follower_target_path = os.path.join(follower_calibration_dir, f"{follower_config_name}.json")
+    leader_target_path = os.path.join(leader_calib_path, f"{leader_config_name}.json")
+    follower_target_path = os.path.join(follower_calib_path, f"{follower_config_name}.json")
 
     if not os.path.exists(leader_target_path):
         if os.path.exists(leader_config_full_path):
@@ -132,24 +148,26 @@ def setup_calibration_files(leader_config: str, follower_config: str):
     return leader_config_name, follower_config_name
 
 
-def setup_follower_calibration_file(follower_config: str):
+def setup_follower_calibration_file(follower_config: str, robot_type: str = "so101"):
     """Setup follower calibration file in the correct location for replay functionality"""
     # Extract config name from file path (remove .json extension)
     follower_config_name = os.path.splitext(follower_config)[0]
 
+    # Resolve dynamic configuration path based on robot_type
+    follower_calib_path = get_calibration_path(robot_type, "follower")
+
     # Log the full path to check if file exists
-    follower_config_full_path = os.path.join(FOLLOWER_CONFIG_PATH, follower_config)
+    follower_config_full_path = os.path.join(follower_calib_path, follower_config)
 
     logger.info("Checking follower calibration file:")
     logger.info(f"Follower config path: {follower_config_full_path}")
     logger.info(f"Follower config exists: {os.path.exists(follower_config_full_path)}")
 
     # Create calibration directory if it doesn't exist
-    follower_calibration_dir = FOLLOWER_CONFIG_PATH
-    os.makedirs(follower_calibration_dir, exist_ok=True)
+    os.makedirs(follower_calib_path, exist_ok=True)
 
     # Copy calibration file to the correct location if it's not already there
-    follower_target_path = os.path.join(follower_calibration_dir, f"{follower_config_name}.json")
+    follower_target_path = os.path.join(follower_calib_path, f"{follower_config_name}.json")
 
     if not os.path.exists(follower_target_path):
         if os.path.exists(follower_config_full_path):
@@ -327,7 +345,7 @@ def get_default_robot_config(robot_type: str, available_configs: list):
 
 # Characters disallowed in a robot name (filesystem safety)
 _INVALID_NAME_CHARS = ("/", "\\", "..")
-_ROBOT_STRING_FIELDS = ("leader_port", "follower_port", "leader_config", "follower_config")
+_ROBOT_STRING_FIELDS = ("leader_port", "follower_port", "leader_config", "follower_config", "robot_type")
 _ROBOT_LIST_FIELDS = ("cameras",)
 
 
@@ -350,6 +368,7 @@ def _empty_record(name: str) -> dict:
         record[field] = ""
     for field in _ROBOT_LIST_FIELDS:
         record[field] = []
+    record["robot_type"] = "so101"
     return record
 
 
@@ -441,10 +460,19 @@ def is_robot_record_clean(record: dict) -> bool:
     """
     if not record:
         return False
-    for field in _ROBOT_STRING_FIELDS:
+    # We check only the four original operational fields for cleanliness.
+    # robot_type is a metadata field and doesn't need to be non-empty,
+    # but it defaults to so101.
+    clean_fields = ("leader_port", "follower_port", "leader_config", "follower_config")
+    for field in clean_fields:
         value = record.get(field, "")
         if not isinstance(value, str) or not value.strip():
             return False
-    leader_path = os.path.join(LEADER_CONFIG_PATH, record["leader_config"])
-    follower_path = os.path.join(FOLLOWER_CONFIG_PATH, record["follower_config"])
+
+    robot_type = record.get("robot_type", "so101")
+    leader_calib_path = get_calibration_path(robot_type, "leader")
+    follower_calib_path = get_calibration_path(robot_type, "follower")
+
+    leader_path = os.path.join(leader_calib_path, record["leader_config"])
+    follower_path = os.path.join(follower_calib_path, record["follower_config"])
     return os.path.exists(leader_path) and os.path.exists(follower_path)

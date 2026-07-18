@@ -20,11 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
-from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
-
 from .utils.config import setup_calibration_files
-from .utils.devices import safe_disconnect_device
+from .utils.devices import make_device, make_device_config, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +58,7 @@ class TeleoperateRequest(BaseModel):
     follower_port: str
     leader_config: str
     follower_config: str
+    robot_type: str = "so101"
 
 
 def get_joint_positions_from_robot(robot) -> dict[str, float]:
@@ -84,7 +82,6 @@ def get_joint_positions_from_robot(robot) -> dict[str, float]:
 
     try:
         observation = robot.get_observation()
-        calibration = robot.calibration or {}
 
         joint_positions: dict[str, float] = {}
         debug_rows = []
@@ -162,26 +159,30 @@ def handle_start_teleoperation(request: TeleoperateRequest, websocket_manager=No
 
         # Setup calibration files
         leader_config_name, follower_config_name = setup_calibration_files(
-            request.leader_config, request.follower_config
+            request.leader_config, request.follower_config, request.robot_type
         )
 
         # Create robot and teleop configs
-        robot_config = SO101FollowerConfig(
+        robot_config = make_device_config(
+            robot_type=request.robot_type,
+            side="follower",
             port=request.follower_port,
-            id=follower_config_name,
+            config_id=follower_config_name,
         )
 
-        teleop_config = SO101LeaderConfig(
+        teleop_config = make_device_config(
+            robot_type=request.robot_type,
+            side="leader",
             port=request.leader_port,
-            id=leader_config_name,
+            config_id=leader_config_name,
         )
 
         # Connect synchronously. If either device fails to connect, clean up the
         # other (so its serial port is released) and report the error — do NOT
         # leave the caller thinking teleoperation started.
         logger.info("Initializing robot and teleop device...")
-        robot = SO101Follower(robot_config)
-        teleop_device = SO101Leader(teleop_config)
+        robot = make_device(request.robot_type, "follower", robot_config)
+        teleop_device = make_device(request.robot_type, "leader", teleop_config)
 
         # Connect each arm separately so the error names which one failed and
         # tells the user what to do, instead of a generic "failed to start".
