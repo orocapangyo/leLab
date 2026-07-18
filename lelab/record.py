@@ -31,7 +31,7 @@ from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
 from .utils.config import setup_calibration_files, with_lelab_tag
-from .utils.devices import safe_disconnect_device
+from .utils.devices import friendly_hint, safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -409,10 +409,19 @@ def handle_recording_status() -> dict[str, Any]:
             logger.info("📡 RECORDING STATUS REQUEST: Session has ended - frontend should stop polling")
             print("📡 STATUS CHANGE: Frontend is still polling after session end - should stop now")
 
+    error = None
+    hint = None
+    if current_phase == "error" and last_recording_info is not None:
+        error = last_recording_info.get("error")
+        if error:
+            hint = friendly_hint(error)
+
     status = {
         "recording_active": recording_active,
         "current_phase": current_phase,  # "preparing", "recording", "resetting", "completed"
         "session_ended": session_ended,  # New field to indicate session completion
+        "error": error,
+        "hint": hint,
         "available_controls": {
             "stop_recording": recording_active,  # ESC key replacement
             "exit_early": recording_active,  # Right arrow key replacement
