@@ -49,6 +49,7 @@ class InferenceRequest(BaseModel):
     task: str = ""
     cameras: dict[str, dict[str, Any]] = {}
     duration_s: int = 60
+    robot_type: str = "so101"
 
 
 inference_active: bool = False
@@ -244,8 +245,17 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         # .json extension. We need that stripped form for `--robot.id`,
         # because lerobot appends `.json` itself when constructing
         # `calibration_dir / f"{id}.json"`.
-        follower_id = setup_follower_calibration_file(request.follower_config)
+        follower_id = setup_follower_calibration_file(request.follower_config, request.robot_type)
         policy_path = _resolve_policy_path(request.policy_ref)
+
+        # Resolve robot type argument for lerobot CLI
+        model = request.robot_type.lower()
+        if "so" in model:
+            robot_type_arg = "--robot.type=so101_follower"
+        elif "omx" in model:
+            robot_type_arg = "--robot.type=omx_follower"
+        else:
+            robot_type_arg = "--robot.type=so101_follower"
 
         cmd = [
             sys.executable,
@@ -254,7 +264,7 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
             "--strategy.type=base",
             f"--policy.path={policy_path}",
             f"--policy.device={_detect_device()}",
-            "--robot.type=so101_follower",
+            robot_type_arg,
             f"--robot.port={request.follower_port}",
             f"--robot.id={follower_id}",
             f"--task={request.task}",

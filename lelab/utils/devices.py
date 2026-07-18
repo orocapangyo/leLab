@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import suppress
-from typing import Any
+from typing import Any, Literal
 
 
 def safe_disconnect_device(device: Any, logger: logging.Logger, context: str = "cleanup") -> None:
@@ -78,4 +78,66 @@ def friendly_hint(error_text: str | None) -> str | None:
     if "permission" in low and ("port" in low or "com" in low):
         return "Couldn't open the serial port — close anything else using it, or run `lelab --stop`."
     return None
+
+
+def make_device_config(
+    robot_type: str,
+    side: Literal["leader", "follower"],
+    port: str,
+    config_id: str,
+    cameras: dict | None = None,
+) -> Any:
+    """Create a LeRobot device config object dynamically based on robot type."""
+    model = robot_type.lower()
+
+    if "so" in model:
+        if side == "follower":
+            from lerobot.robots.so_follower import SO101FollowerConfig
+
+            return SO101FollowerConfig(port=port, id=config_id, cameras=cameras or {})
+        else:
+            from lerobot.teleoperators.so_leader import SO101LeaderConfig
+
+            return SO101LeaderConfig(port=port, id=config_id)
+
+    elif "omx" in model:
+        if side == "follower":
+            from lerobot.robots.omx_follower import OmxFollowerConfig
+
+            return OmxFollowerConfig(port=port, id=config_id, cameras=cameras or {})
+        else:
+            from lerobot.teleoperators.omx_leader import OmxLeaderConfig
+
+            return OmxLeaderConfig(port=port, id=config_id)
+
+    else:
+        raise ValueError(f"Unsupported robot model: {robot_type}")
+
+
+def make_device(robot_type: str, side: Literal["leader", "follower"], config: Any) -> Any:
+    """Create a LeRobot device instance dynamically based on robot type and config."""
+    model = robot_type.lower()
+
+    if "so" in model:
+        if side == "follower":
+            from lerobot.robots.so_follower import SO101Follower
+
+            return SO101Follower(config)
+        else:
+            from lerobot.teleoperators.so_leader import SO101Leader
+
+            return SO101Leader(config)
+
+    elif "omx" in model:
+        if side == "follower":
+            from lerobot.robots.omx_follower import OmxFollower
+
+            return OmxFollower(config)
+        else:
+            from lerobot.teleoperators.omx_leader import OmxLeader
+
+            return OmxLeader(config)
+
+    else:
+        raise ValueError(f"Unsupported robot model: {robot_type}")
 

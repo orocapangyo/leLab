@@ -54,7 +54,7 @@ def test_create_record_config_pins_dshow_on_windows(monkeypatch: pytest.MonkeyPa
     from lerobot.cameras.configs import Cv2Backends
 
     monkeypatch.setattr("platform.system", lambda: "Windows")
-    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower: ("leader", "follower"))
+    monkeypatch.setattr(record, "setup_calibration_files", lambda leader, follower, *args: ("leader", "follower"))
 
     request = record.RecordingRequest(
         leader_port="COM_LEADER",
