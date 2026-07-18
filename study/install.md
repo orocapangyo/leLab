@@ -66,22 +66,25 @@ uv pip install -e ".[dev,test]"
 
 ## 🚀 3단계: LeLab 실행하기
 
-가상환경이 활성화된 상태에서 아래 명령어를 사용하여 앱을 실행할 수 있습니다. 실행 명령어는 Windows/Linux 공통입니다. (가상환경을 활성화하지 않았다면 `uv run lelab` 형태로도 실행할 수 있습니다.)
+**기본 실행 명령어는 `uv run`을 사용합니다.** `uv run`은 가상환경 활성화 없이도 프로젝트의 `.venv`를 자동으로 찾아 실행하고, 의존성이 바뀌었으면 실행 전에 자동으로 동기화까지 해주므로 가장 안전하고 간편합니다. 명령어는 Windows/Linux 공통입니다.
 
-### A. 일반 모드 (서버 & 빌드된 프론트엔드 통합 실행)
-Vite로 빌드된 정적 프론트엔드 파일과 FastAPI 백엔드가 포트 `8000`에서 동시에 실행되며, 브라우저 창이 자동으로 열립니다.
-```bash
-lelab
-```
-
-### B. 개발자 모드 (핫 리로드 및 실시간 코드 수정)
+### A. 개발자 모드 — 기본 권장 (핫 리로드 및 실시간 코드 수정)
 백엔드 FastAPI 서버(`:8000`, 자동 재실행 적용)와 프론트엔드 Vite 개발 서버(`:8080`)를 동시에 띄우며, 코드 수정 시 실시간으로 화면에 반영됩니다.
 ```bash
-lelab --dev
+uv run lelab --dev
+```
+
+### B. 일반 모드 (서버 & 빌드된 프론트엔드 통합 실행)
+Vite로 빌드된 정적 프론트엔드 파일과 FastAPI 백엔드가 포트 `8000`에서 동시에 실행되며, 브라우저 창이 자동으로 열립니다.
+```bash
+uv run lelab
 ```
 
 > [!NOTE]
-> 개발자 모드는 프론트엔드 빌드를 위해 **Node.js LTS**(및 npm)가 필요합니다. Linux에서는 `sudo apt install nodejs npm` 또는 [nvm](https://github.com/nvm-sh/nvm)으로 설치하세요. 백엔드 최초 기동은 `lerobot`(torch 포함) 로딩 때문에 20~30초가량 걸릴 수 있습니다.
+> - 옵션은 이중 하이픈입니다: `--dev` (○) / `-dev` (✕ — `unrecognized arguments` 오류 발생)
+> - 가상환경을 이미 활성화한 상태라면 `uv run` 없이 `lelab --dev` / `lelab`으로 실행해도 동일합니다.
+> - 개발자 모드는 프론트엔드 빌드를 위해 **Node.js LTS**(및 npm)가 필요합니다. Linux에서는 `sudo apt install nodejs npm` 또는 [nvm](https://github.com/nvm-sh/nvm)으로 설치하세요. 백엔드 최초 기동은 `lerobot`(torch 포함) 로딩 때문에 20~30초가량 걸릴 수 있습니다.
+> - 이전 실행이 포트(`8000`/`8080`)를 잡고 있어 시작에 실패하면 `uv run lelab --stop`으로 정리한 뒤 다시 실행하세요.
 
 ---
 
