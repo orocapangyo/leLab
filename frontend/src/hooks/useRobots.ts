@@ -87,7 +87,7 @@ export const useRobots = () => {
   }, []);
 
   const createRobot = useCallback(
-    async (rawName: string): Promise<boolean> => {
+    async (rawName: string, robotType: string = "so101"): Promise<boolean> => {
       const name = rawName.trim();
       if (!name) {
         toast({ title: "Missing name", description: "Robot name cannot be empty.", variant: "destructive" });
@@ -101,7 +101,7 @@ export const useRobots = () => {
         const res = await fetchWithHeaders(`${baseUrl}/robots/${encodeURIComponent(name)}?create=true`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: "{}",
+          body: JSON.stringify({ robot_type: robotType }),
         });
         if (res.status === 409) {
           toast({

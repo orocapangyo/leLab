@@ -11,7 +11,7 @@ interface RobotConfigManagerProps {
   availableNames: string[];
   isLoading: boolean;
   selectRobot: (name: string) => void;
-  createRobot: (name: string) => Promise<boolean>;
+  createRobot: (name: string, robotType: string) => Promise<boolean>;
   deleteRobot: (name: string) => Promise<boolean>;
 }
 
