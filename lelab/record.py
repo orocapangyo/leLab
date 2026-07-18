@@ -31,6 +31,7 @@ from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
 
 from .utils.config import setup_calibration_files, with_lelab_tag
+from .utils.devices import safe_disconnect_device
 
 logger = logging.getLogger(__name__)
 
@@ -600,7 +601,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             cfg.dataset.repo_id,
             root=cfg.dataset.root,
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
-            vcodec=cfg.dataset.vcodec,
+            rgb_encoder=cfg.dataset.rgb_encoder,
+            depth_encoder=cfg.dataset.depth_encoder,
             streaming_encoding=cfg.dataset.streaming_encoding,
             encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
             encoder_threads=cfg.dataset.encoder_threads,
@@ -622,7 +624,8 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
             image_writer_processes=cfg.dataset.num_image_writer_processes,
             image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
-            vcodec=cfg.dataset.vcodec,
+            rgb_encoder=cfg.dataset.rgb_encoder,
+            depth_encoder=cfg.dataset.depth_encoder,
             streaming_encoding=cfg.dataset.streaming_encoding,
             encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
             encoder_threads=cfg.dataset.encoder_threads,
@@ -860,9 +863,12 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     finally:
-        robot.disconnect()
+        # safe_disconnect_device force-releases the serial port / cameras if a
+        # normal disconnect fails, so a flaky teardown can't leave the device
+        # busy and block the next recording session (see issue #50).
+        safe_disconnect_device(robot, logger, context="recording cleanup")
         if teleop:
-            teleop.disconnect()
+            safe_disconnect_device(teleop, logger, context="recording cleanup")
 
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
