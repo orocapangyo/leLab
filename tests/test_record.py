@@ -119,3 +119,28 @@ def test_build_camera_configs_skips_non_opencv_type() -> None:
     configs = _build_camera_configs(cameras, Cv2Backends.ANY)
 
     assert configs == {}
+
+
+def test_recording_status_surfaces_error_and_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the recording session ends with an error, handle_recording_status must
+    correctly return the error traceback/message and a friendly troubleshooting hint.
+    """
+    import lelab.record as record
+
+    # Force error state
+    monkeypatch.setattr(record, "current_phase", "error")
+    monkeypatch.setattr(record, "recording_active", False)
+    monkeypatch.setattr(
+        record,
+        "last_recording_info",
+        {"success": False, "error": "RuntimeError: Motor 6 overload, torque_enable failed"},
+    )
+
+    result = record.handle_recording_status()
+    assert result["recording_active"] is False
+    assert result["current_phase"] == "error"
+    assert result["session_ended"] is True
+    assert "Motor 6 overload" in result["error"]
+    assert result["hint"] is not None
+    assert "overloaded" in result["hint"].lower()
+
