@@ -32,6 +32,13 @@ LEADER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_TELEOP, "so_leader")
 FOLLOWER_CONFIG_PATH = os.path.join(CALIBRATION_BASE_PATH_ROBOTS, "so_follower")
 
 
+def is_omx_robot_type(robot_type: str | None) -> bool:
+    """OMX arms come pre-calibrated and self-calibrate on first connect (see
+    OmxFollower/OmxLeader.connect() in lerobot), so LeLab's web calibration
+    step and its "calibration file must already exist" checks don't apply."""
+    return "omx" in (robot_type or "so101").lower().replace("-", "_")
+
+
 def get_calibration_path(robot_type: str | None, side: Literal["leader", "follower"]) -> str:
     """Get the directory where calibration configurations are stored for a given robot model."""
     base_config_path = LEADER_CONFIG_PATH if side == "leader" else FOLLOWER_CONFIG_PATH
@@ -127,10 +134,14 @@ def setup_calibration_files(leader_config: str, follower_config: str, robot_type
     leader_target_path = os.path.join(leader_calib_path, f"{leader_config_name}.json")
     follower_target_path = os.path.join(follower_calib_path, f"{follower_config_name}.json")
 
+    omx = is_omx_robot_type(robot_type)
+
     if not os.path.exists(leader_target_path):
         if os.path.exists(leader_config_full_path):
             shutil.copy2(leader_config_full_path, leader_target_path)
             logger.info(f"Copied leader calibration to {leader_target_path}")
+        elif omx:
+            logger.info(f"No leader calibration yet for OMX at {leader_target_path}; will self-calibrate on connect")
         else:
             raise FileNotFoundError(f"Leader calibration file not found: {leader_config_full_path}")
     else:
@@ -140,6 +151,8 @@ def setup_calibration_files(leader_config: str, follower_config: str, robot_type
         if os.path.exists(follower_config_full_path):
             shutil.copy2(follower_config_full_path, follower_target_path)
             logger.info(f"Copied follower calibration to {follower_target_path}")
+        elif omx:
+            logger.info(f"No follower calibration yet for OMX at {follower_target_path}; will self-calibrate on connect")
         else:
             raise FileNotFoundError(f"Follower calibration file not found: {follower_config_full_path}")
     else:
@@ -173,6 +186,8 @@ def setup_follower_calibration_file(follower_config: str, robot_type: str = "so1
         if os.path.exists(follower_config_full_path):
             shutil.copy2(follower_config_full_path, follower_target_path)
             logger.info(f"Copied follower calibration to {follower_target_path}")
+        elif is_omx_robot_type(robot_type):
+            logger.info(f"No follower calibration yet for OMX at {follower_target_path}; will self-calibrate on connect")
         else:
             raise FileNotFoundError(f"Follower calibration file not found: {follower_config_full_path}")
     else:
@@ -434,6 +449,17 @@ def save_robot_record(name: str, data: dict, allow_create: bool = True) -> bool:
             record[field] = data[field]
     record["name"] = name
 
+    # OMX arms don't go through LeLab's step-based web calibration wizard (it's
+    # SO-101-specific joint-range recording); OMX self-calibrates with fixed
+    # factory-default values on first connect, so any calibration id works.
+    # Default one in from the robot name so the record can become "clean"
+    # without ever running calibration.
+    if is_omx_robot_type(record.get("robot_type")):
+        if not record.get("leader_config", "").strip():
+            record["leader_config"] = f"{name}.json"
+        if not record.get("follower_config", "").strip():
+            record["follower_config"] = f"{name}.json"
+
     path = _robot_record_path(name)
     _atomic_write_text(path, json.dumps(record, indent=2))
     logger.info(f"Saved robot record {name}: {record}")
@@ -457,6 +483,11 @@ def is_robot_record_clean(record: dict) -> bool:
     A record is 'clean' when all four operational fields are populated AND both
     referenced calibration files exist on disk. Cameras are optional and don't
     affect cleanliness.
+
+    OMX arms are exempt from the calibration-file-exists check: they don't go
+    through LeLab's web calibration flow and self-calibrate on first connect
+    (see is_omx_robot_type / OmxFollower.connect() in lerobot), so ports+config
+    names being set is enough to be considered ready for teleoperation.
     """
     if not record:
         return False
@@ -470,6 +501,9 @@ def is_robot_record_clean(record: dict) -> bool:
             return False
 
     robot_type = record.get("robot_type", "so101")
+    if is_omx_robot_type(robot_type):
+        return True
+
     leader_calib_path = get_calibration_path(robot_type, "leader")
     follower_calib_path = get_calibration_path(robot_type, "follower")
 
