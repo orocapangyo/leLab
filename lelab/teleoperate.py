@@ -123,13 +123,14 @@ def get_joint_positions_from_robot(robot, robot_type: str = "so101") -> dict[str
                 angle_degrees = (raw_value / 100.0) * 60.0 if motor_name == "gripper" else raw_value * 1.8
             else:
                 angle_degrees = raw_value
-                #correction = _SO101_URDF_CORRECTIONS.get(motor_name)
-                #if correction is not None and motor_name in calibration:
-                #    sign, urdf_zero_ticks = correction
-                #    cal = calibration[motor_name]
-                #    mid = (cal.range_min + cal.range_max) / 2
-                #    motor_at_urdf_zero = (urdf_zero_ticks - mid) * 360 / _STS3215_MAX_RES
-                #    angle_degrees = sign * (raw_deg - motor_at_urdf_zero)
+                calibration = robot.calibration or {}
+                correction = _SO101_URDF_CORRECTIONS.get(motor_name)
+                if correction is not None and motor_name in calibration:
+                    sign, urdf_zero_ticks = correction
+                    cal = calibration[motor_name]
+                    mid = (cal.range_min + cal.range_max) / 2
+                    motor_at_urdf_zero = (urdf_zero_ticks - mid) * 360 / _STS3215_MAX_RES
+                    angle_degrees = sign * (raw_value - motor_at_urdf_zero)
 
             joint_positions[urdf_joint_name] = angle_degrees * math.pi / 180.0
             debug_rows.append(
