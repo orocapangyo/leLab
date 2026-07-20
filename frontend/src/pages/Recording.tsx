@@ -154,7 +154,7 @@ const Recording = () => {
         if (!response.ok) return;
         const status = await response.json();
         
-        if (status.current_phase === "error") {
+        if (status.current_phase === "error" && status.session_ended) {
           setSessionError({
             error: status.error || "Recording session failed.",
             hint: status.hint || null,
