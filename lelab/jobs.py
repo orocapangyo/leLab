@@ -278,12 +278,20 @@ class SubprocessJobRunner:
             return
         self._stop_event.set()
         try:
-            self._process.terminate()
+            # start_new_session=True made this pid its own process group
+            # leader, so killpg reaches grandchildren too (e.g. PyTorch
+            # DataLoader num_workers processes) that Popen.terminate()/.kill()
+            # — which only signal the single tracked pid — would otherwise
+            # orphan as leaked, CPU/GPU-hogging processes.
+            pgid = os.getpgid(self._process.pid)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pgid, signal.SIGTERM)
             try:
                 self._process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 logger.warning("Subprocess did not terminate in 10s, killing")
-                self._process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(pgid, signal.SIGKILL)
                 self._process.wait()
         except Exception as exc:
             logger.exception("Error stopping subprocess: %s", exc)
@@ -418,8 +426,12 @@ class TailingJobRunner:
         self._tail_thread.start()
 
     def stop(self) -> None:
+        # This pid was started with start_new_session=True (see _spawn), so
+        # it is also its own process group leader — killpg reaches any
+        # grandchild multiprocessing workers that a plain os.kill(pid, ...)
+        # would leave running as orphans.
         with contextlib.suppress(ProcessLookupError):
-            os.kill(self._pid, signal.SIGTERM)
+            os.killpg(self._pid, signal.SIGTERM)
         self._stop_event.set()
 
     def is_running(self) -> bool:
