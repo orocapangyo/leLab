@@ -35,6 +35,10 @@ def _reset_rollout_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rollout, "_inference_started_at", None)
     monkeypatch.setattr(rollout, "_inference_rollout_started_at", None)
     monkeypatch.setattr(rollout, "_inference_meta", {})
+    monkeypatch.setattr(rollout, "_inference_thread", None)
+    monkeypatch.setattr(rollout, "_inference_shutdown_event", None)
+    monkeypatch.setattr(rollout, "_inference_thread_done", False)
+    monkeypatch.setattr(rollout, "_inference_thread_rc", 0)
 
 
 def test_inference_request_rejects_missing_required_fields() -> None:
@@ -229,6 +233,141 @@ def _stub_request():
         follower_config="robot_a",
         policy_ref="user/repo@checkpoints/000050",
     )
+
+
+# --- Bimanual (in-process) inference -------------------------------------
+
+
+def test_inference_request_bimanual_fields_default_empty() -> None:
+    """The right-arm fields are optional; a single-arm request leaves them
+    empty so handle_start_inference stays on the subprocess path."""
+    req = _stub_request()
+    assert req.right_follower_port == ""
+    assert req.right_follower_config == ""
+    assert req.right_robot_type == ""
+
+
+def test_build_bimanual_follower_config_splits_ports_and_cameras(monkeypatch) -> None:
+    """The composite follower config must carry each side's own port and route
+    left_/right_-prefixed cameras to the matching arm (stripping the prefix),
+    so the observation keys match what the policy trained on."""
+    import lelab.rollout as rollout
+    from lelab.utils.bimanual import BimanualRobotConfig
+
+    # setup_follower_calibration_file touches disk / calibration dirs; stub it.
+    monkeypatch.setattr(rollout, "setup_follower_calibration_file", lambda cfg, robot_type: cfg)
+
+    req = rollout.InferenceRequest(
+        follower_port="/dev/ttyACM0",
+        follower_config="left",
+        policy_ref="user/repo@checkpoints/000050",
+        robot_type="omx",
+        right_follower_port="/dev/ttyACM2",
+        right_follower_config="right",
+        right_robot_type="omx",
+        cameras={
+            "left_r": {"type": "opencv", "camera_index": 0, "width": 640, "height": 480, "fps": 30},
+            "left_l": {"type": "opencv", "camera_index": 1, "width": 640, "height": 480, "fps": 30},
+        },
+    )
+
+    cfg = rollout._build_bimanual_follower_config(req)
+
+    assert isinstance(cfg, BimanualRobotConfig)
+    assert cfg.left.port == "/dev/ttyACM0"
+    assert cfg.right.port == "/dev/ttyACM2"
+    # Both cameras were left_-prefixed -> attached to the left arm, prefix stripped.
+    assert set(cfg.left.cameras.keys()) == {"r", "l"}
+    assert cfg.right.cameras == {}
+
+
+def test_handle_start_inference_routes_bimanual_to_inprocess(monkeypatch) -> None:
+    """A request with a right follower port must take the in-process branch
+    (not spawn the single-arm subprocess)."""
+    import lelab.rollout as rollout
+
+    monkeypatch.setattr(rollout, "_resolve_policy_path", lambda ref: "/tmp/pretrained_model")
+
+    called: dict = {}
+
+    def _fake_start_bimanual(request, policy_path, log_path):
+        called["request"] = request
+        called["policy_path"] = policy_path
+        return {"success": True, "message": "Inference started", "log_path": str(log_path)}
+
+    monkeypatch.setattr(rollout, "_start_bimanual_inference", _fake_start_bimanual)
+    # Guard: the subprocess path must never be reached for a bimanual request.
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "Popen",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("subprocess path taken for bimanual")),
+    )
+
+    req = rollout.InferenceRequest(
+        follower_port="/dev/ttyACM0",
+        follower_config="left",
+        policy_ref="user/repo@checkpoints/000050",
+        robot_type="omx",
+        right_follower_port="/dev/ttyACM2",
+        right_follower_config="right",
+        right_robot_type="omx",
+    )
+    result = rollout.handle_start_inference(req)
+
+    assert result["success"] is True
+    assert called["policy_path"] == "/tmp/pretrained_model"
+    assert called["request"].right_follower_port == "/dev/ttyACM2"
+
+
+def test_handle_stop_inference_signals_bimanual_thread(monkeypatch) -> None:
+    """Stopping an in-process rollout must set the shutdown event and clear
+    state, without touching the subprocess terminate path."""
+    import threading
+
+    import lelab.rollout as rollout
+
+    event = threading.Event()
+
+    class _DummyThread:
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(rollout, "inference_active", True)
+    monkeypatch.setattr(rollout, "_inference_thread", _DummyThread())
+    monkeypatch.setattr(rollout, "_inference_shutdown_event", event)
+
+    result = rollout.handle_stop_inference()
+
+    assert result["success"] is True
+    assert event.is_set()
+    assert rollout.inference_active is False
+    assert rollout._inference_thread is None
+
+
+def test_handle_inference_status_finalises_finished_bimanual_thread(monkeypatch) -> None:
+    """When the worker flags itself done, status must surface the exit code and
+    reset state (lazy finalise, mirroring the subprocess poll path)."""
+    import threading
+
+    import lelab.rollout as rollout
+
+    monkeypatch.setattr(rollout, "inference_active", True)
+    monkeypatch.setattr(rollout, "_inference_thread", threading.Thread(target=lambda: None))
+    monkeypatch.setattr(rollout, "_inference_thread_done", True)
+    monkeypatch.setattr(rollout, "_inference_thread_rc", 0)
+    monkeypatch.setattr(rollout, "_inference_meta", {"policy_ref": "user/repo", "duration_s": 60})
+
+    result = rollout.handle_inference_status()
+
+    assert result["inference_active"] is False
+    assert result["exited"] is True
+    assert result["exit_code"] == 0
+    assert result["outcome"] == "ok"
+    assert rollout._inference_thread is None
+    assert rollout.inference_active is False
 
 
 def test_handle_start_inference_blocked_when_teleoperation_active(monkeypatch) -> None:

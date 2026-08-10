@@ -50,6 +50,13 @@ class InferenceRequest(BaseModel):
     cameras: dict[str, dict[str, Any]] = {}
     duration_s: int = 60
     robot_type: str = "so101"
+    # Bimanual (right follower). When right_follower_port is set the rollout
+    # runs in-process against a composite BimanualRobot (12-DoF) instead of
+    # shelling out to lerobot-rollout, whose CLI only knows single-arm robot
+    # types. The left arm reuses the fields above.
+    right_follower_port: str = ""
+    right_follower_config: str = ""
+    right_robot_type: str = ""
 
 
 inference_active: bool = False
@@ -57,6 +64,16 @@ _inference_proc: subprocess.Popen | None = None
 _inference_started_at: float | None = None
 _inference_rollout_started_at: float | None = None
 _inference_meta: dict[str, Any] = {}
+# Bimanual runs in-process (a thread + a cooperative shutdown Event) rather
+# than as a subprocess. These mirror the subprocess fields so status/stop can
+# treat either backend uniformly: exactly one of _inference_proc /
+# _inference_thread is non-None while a session is live.
+_inference_thread: threading.Thread | None = None
+_inference_shutdown_event: threading.Event | None = None
+# Set by the worker thread when it finishes; the status handler reads them to
+# finalise (same lazy-finalise pattern as the subprocess poll()).
+_inference_thread_done: bool = False
+_inference_thread_rc: int = 0
 # Guards mutations to the globals above; held only for the short critical
 # sections in start/stop/status.
 _state_lock = threading.Lock()
@@ -209,6 +226,163 @@ def _classify_outcome(rc: int | None, rollout_started: bool, error_text: str | N
     return "failed"
 
 
+@contextlib.contextmanager
+def _patched_bimanual_robot_factory():
+    """Teach lerobot's rollout context builder to construct lelab's composite
+    BimanualRobot. `build_rollout_context()` calls the module-level
+    `make_robot_from_config` name it imported into `lerobot.rollout.context`;
+    we swap that name for the duration of one in-process rollout so a
+    `BimanualRobotConfig` (not a draccus-registered robot type) resolves to
+    `BimanualRobot.from_config`, while every other robot type falls through
+    unchanged."""
+    import lerobot.rollout.context as _ctx
+
+    from .utils.bimanual import BimanualRobot, BimanualRobotConfig
+
+    original = _ctx.make_robot_from_config
+
+    def _patched(config):
+        if isinstance(config, BimanualRobotConfig):
+            return BimanualRobot.from_config(config)
+        return original(config)
+
+    _ctx.make_robot_from_config = _patched
+    try:
+        yield
+    finally:
+        _ctx.make_robot_from_config = original
+
+
+def _build_bimanual_follower_config(request: InferenceRequest):
+    """Build the composite follower config for an in-process bimanual rollout,
+    reusing record.py's camera-splitting so the observation keys (left_*/
+    right_*, and cameras such as left_r/left_l) exactly match what the policy
+    was trained on during recording."""
+    from .record import _build_camera_configs, _platform_backend, _split_cameras_by_side
+    from .utils.devices import make_bimanual_device_config
+
+    left_id = setup_follower_calibration_file(request.follower_config, request.robot_type)
+    right_id = setup_follower_calibration_file(request.right_follower_config, request.right_robot_type)
+
+    left_cameras, right_cameras = _split_cameras_by_side(request.cameras)
+    backend = _platform_backend()
+    return make_bimanual_device_config(
+        left_robot_type=request.robot_type,
+        right_robot_type=request.right_robot_type,
+        side="follower",
+        left_port=request.follower_port,
+        right_port=request.right_follower_port,
+        left_config_id=left_id,
+        right_config_id=right_id,
+        left_cameras=_build_camera_configs(left_cameras, backend),
+        right_cameras=_build_camera_configs(right_cameras, backend),
+    )
+
+
+def _bimanual_inference_worker(
+    request: InferenceRequest,
+    policy_path: str,
+    shutdown_event: threading.Event,
+    log_path: Path,
+) -> None:
+    """Run one in-process bimanual rollout to completion, reusing lerobot's own
+    rollout wiring (policy load, sync inference engine, base control loop,
+    teardown) via build_rollout_context/create_strategy — only the robot
+    construction is swapped for lelab's BimanualRobot."""
+    global _inference_rollout_started_at, _inference_thread_done, _inference_thread_rc
+
+    # Tee lerobot's module loggers (they propagate to root) into the same
+    # per-session log file the subprocess backend writes, so the status
+    # handler's error extraction works identically for both backends.
+    file_handler = logging.FileHandler(log_path)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+
+    rc = 0
+    try:
+        import lerobot.policies  # noqa: F401 — registers policy config subclasses (ACTConfig, …) with draccus so PreTrainedConfig.from_pretrained can resolve `type`
+        from lerobot.configs.policies import PreTrainedConfig
+        from lerobot.rollout import build_rollout_context, create_strategy
+        from lerobot.rollout.configs import BaseStrategyConfig, RolloutConfig
+
+        robot_config = _build_bimanual_follower_config(request)
+
+        policy_config = PreTrainedConfig.from_pretrained(policy_path)
+        policy_config.pretrained_path = Path(policy_path)
+
+        cfg = RolloutConfig(
+            robot=robot_config,
+            policy=policy_config,
+            strategy=BaseStrategyConfig(),
+            fps=30.0,
+            duration=float(request.duration_s),
+            device=_detect_device(),
+            task=request.task,
+            return_to_initial_position=True,
+        )
+
+        with _patched_bimanual_robot_factory():
+            ctx = build_rollout_context(cfg, shutdown_event)
+            strategy = create_strategy(cfg.strategy)
+            try:
+                strategy.setup(ctx)
+                # Marker string kept in sync with the subprocess path so the UI
+                # can still separate setup time from rollout time.
+                logger.info("Rollout setup complete, starting rollout...")
+                _inference_rollout_started_at = time.time()
+                strategy.run(ctx)
+            finally:
+                strategy.teardown(ctx)
+        logger.info("Rollout finished")
+    except Exception:
+        import traceback
+
+        rc = 1
+        # init_logging's formatter drops exc_info, so write the traceback as
+        # plain text to guarantee it lands in the log for _extract_error.
+        logging.getLogger(__name__).error("Bimanual inference failed:\n%s", traceback.format_exc())
+    finally:
+        root_logger.removeHandler(file_handler)
+        with contextlib.suppress(Exception):
+            file_handler.close()
+        with _state_lock:
+            _inference_thread_rc = rc
+            _inference_thread_done = True
+
+
+def _start_bimanual_inference(
+    request: InferenceRequest, policy_path: str, log_path: Path
+) -> dict[str, Any]:
+    """Launch the in-process bimanual rollout thread. Assumes the inference
+    slot is already claimed (inference_active=True)."""
+    global _inference_thread, _inference_shutdown_event, _inference_thread_done
+    global _inference_thread_rc, _inference_started_at, _inference_rollout_started_at, _inference_meta
+
+    shutdown_event = threading.Event()
+    thread = threading.Thread(
+        target=_bimanual_inference_worker,
+        args=(request, policy_path, shutdown_event, log_path),
+        name="bimanual-inference",
+        daemon=True,
+    )
+    with _state_lock:
+        _inference_thread = thread
+        _inference_shutdown_event = shutdown_event
+        _inference_thread_done = False
+        _inference_thread_rc = 0
+        _inference_started_at = time.time()
+        _inference_rollout_started_at = None
+        _inference_meta = {
+            "policy_ref": request.policy_ref,
+            "duration_s": request.duration_s,
+            "log_path": str(log_path),
+        }
+    thread.start()
+    logger.info("Bimanual inference started (in-process): policy=%s", policy_path)
+    return {"success": True, "message": "Inference started", "log_path": str(log_path)}
+
+
 def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
     """Start a one-shot rollout subprocess. Returns a dict — the route
     layer turns it into a JSON response or HTTPException as appropriate."""
@@ -241,12 +415,23 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         inference_active = True
 
     try:
+        policy_path = _resolve_policy_path(request.policy_ref)
+
+        log_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "inference_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{int(time.time())}.log"
+
+        # Bimanual: lerobot-rollout's CLI only knows single-arm robot types, so
+        # a 12-DoF composite robot can't be expressed as a subprocess. Run it
+        # in-process against lelab's BimanualRobot instead.
+        if request.right_follower_port:
+            return _start_bimanual_inference(request, policy_path, log_path)
+
         # `setup_follower_calibration_file` returns the basename without the
         # .json extension. We need that stripped form for `--robot.id`,
         # because lerobot appends `.json` itself when constructing
         # `calibration_dir / f"{id}.json"`.
         follower_id = setup_follower_calibration_file(request.follower_config, request.robot_type)
-        policy_path = _resolve_policy_path(request.policy_ref)
 
         # Resolve robot type argument for lerobot CLI
         model = request.robot_type.lower()
@@ -273,9 +458,6 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
         if request.cameras:
             cmd.append(f"--robot.cameras={_format_cameras_arg(request.cameras)}")
 
-        log_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "inference_logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"{int(time.time())}.log"
         log_handle = log_path.open("w", buffering=1)
 
         env = os.environ.copy()
@@ -329,22 +511,35 @@ def handle_start_inference(request: InferenceRequest) -> dict[str, Any]:
 def handle_stop_inference() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
+    global _inference_thread, _inference_shutdown_event, _inference_thread_done, _inference_thread_rc
 
     with _state_lock:
-        if not inference_active or _inference_proc is None:
+        if not inference_active:
             return {"success": False, "status_code": 409, "message": "No inference is active"}
         proc = _inference_proc
+        thread = _inference_thread
+        shutdown_event = _inference_shutdown_event
 
-    try:
-        proc.terminate()
+    if thread is not None:
+        # In-process bimanual: ask the control loop to stop, then wait out the
+        # teardown (return-to-initial-position + disconnect) so the serial bus
+        # is released before we report stopped.
+        if shutdown_event is not None:
+            shutdown_event.set()
+        thread.join(timeout=20)
+        if thread.is_alive():
+            logger.warning("Bimanual inference thread did not stop within 20s")
+    elif proc is not None:
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            logger.warning("Inference did not exit in 5s; killing")
-            proc.kill()
-            proc.wait()
-    except Exception as exc:
-        logger.exception("Stop inference: %s", exc)
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("Inference did not exit in 5s; killing")
+                proc.kill()
+                proc.wait()
+        except Exception as exc:
+            logger.exception("Stop inference: %s", exc)
 
     with _state_lock:
         inference_active = False
@@ -352,15 +547,54 @@ def handle_stop_inference() -> dict[str, Any]:
         _inference_started_at = None
         _inference_rollout_started_at = None
         _inference_meta = {}
+        _inference_thread = None
+        _inference_shutdown_event = None
+        _inference_thread_done = False
+        _inference_thread_rc = 0
     return {"success": True, "message": "Inference stopped"}
 
 
 def handle_inference_status() -> dict[str, Any]:
     global inference_active, _inference_proc, _inference_started_at
     global _inference_rollout_started_at, _inference_meta
+    global _inference_thread, _inference_shutdown_event, _inference_thread_done, _inference_thread_rc
 
-    # Finalise state lazily if the subprocess died on its own.
+    # Finalise state lazily if the run finished on its own.
     with _state_lock:
+        # In-process bimanual backend: the worker thread flags itself done.
+        if _inference_thread is not None and _inference_thread_done:
+            rc = _inference_thread_rc
+            logger.info("Bimanual inference thread finished rc=%s", rc)
+            finished_meta = _inference_meta
+            finished_started = _inference_started_at
+            finished_rollout_started = _inference_rollout_started_at
+            inference_active = False
+            _inference_thread = None
+            _inference_shutdown_event = None
+            _inference_thread_done = False
+            _inference_thread_rc = 0
+            _inference_proc = None
+            _inference_started_at = None
+            _inference_rollout_started_at = None
+            _inference_meta = {}
+            error = _extract_error_from_log(finished_meta.get("log_path")) if rc else None
+            outcome = _classify_outcome(rc, finished_rollout_started is not None, error)
+            return {
+                "inference_active": False,
+                "exited": True,
+                "exit_code": rc,
+                "outcome": outcome,
+                "error": error,
+                "hint": friendly_hint(error),
+                "policy_ref": finished_meta.get("policy_ref"),
+                "duration_s": finished_meta.get("duration_s"),
+                "log_path": finished_meta.get("log_path"),
+                "started_at": finished_started,
+                "rollout_started_at": finished_rollout_started,
+                "rollout_elapsed_s": 0,
+                "elapsed_s": 0,
+            }
+
         proc = _inference_proc
         if proc is not None and proc.poll() is not None:
             rc = proc.returncode
