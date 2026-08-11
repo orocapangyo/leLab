@@ -826,6 +826,16 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
     else:
         logger.warning("Teleop bus or calibration not available - calibration may not be applied")
 
+    # The disable_torque()/write_calibration()/configure() dance above pushes a
+    # burst of EEPROM + torque-enable writes to every motor on every bus (up to
+    # 4 buses x 6 motors in bimanual mode) right before the recording loop
+    # issues its first Present_Position sync_read. Some USB-serial adapters
+    # (CH340-style leader/follower boards especially) need a brief moment to
+    # drain that write burst before they'll answer a read reliably - without
+    # this, the first sync_read can come back as "no status packet" on every
+    # id at once, seconds into episode 1.
+    time.sleep(0.5)
+
     # Start with episode 1 - but track it properly
     current_episode = 1
     saved_episodes = 0  # Track how many episodes we've actually saved
@@ -863,7 +873,15 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
 
             logger.info(f"Recording phase completed - events state: {web_events}")
 
-            # Check if exit_early was triggered (use our tracking flag)
+            # Re-record only happens when the user explicitly asked for it via
+            # the "Re-record episode" button (POST /recording-rerecord-episode,
+            # which sets rerecord_episode directly). Reaching the end of
+            # episode_time_s on its own is a *normal* completion - same as the
+            # user clicking "End Episode" (exit_early) - and must fall through
+            # to save the episode. Previously this else-branch force-set
+            # rerecord_episode=True on every plain timeout, so any episode the
+            # user didn't manually end before the clock ran out was silently
+            # discarded and re-recorded forever instead of advancing.
             recording_interrupted_by_exit_early = web_events.get("_exit_early_triggered", False)
             if recording_interrupted_by_exit_early:
                 logger.info("🟡 RECORDING PHASE INTERRUPTED BY EXIT_EARLY - proceeding to save episode")
@@ -872,13 +890,14 @@ def record_with_web_events(cfg: RecordConfig, web_events: dict) -> LeRobotDatase
                 )
                 # Reset our tracking flag
                 web_events["_exit_early_triggered"] = False
+            elif web_events.get("rerecord_episode"):
+                logger.info("🔁 RECORDING PHASE ENDED WITH RE-RECORD REQUESTED BY USER")
+                print(f"🔁 STATUS CHANGE: Re-record requested for episode {current_episode}")
             else:
-                # Recording completed due to timeout - trigger re-record behavior
-                logger.info("⏰ RECORDING PHASE COMPLETED DUE TO TIMEOUT - triggering re-record")
+                logger.info("✅ RECORDING PHASE COMPLETED - full duration reached, proceeding to save episode")
                 print(
-                    f"⏰ STATUS CHANGE: Recording timeout reached for episode {current_episode} - re-recording"
+                    f"✅ STATUS CHANGE: Recording timeout reached for episode {current_episode} - saving"
                 )
-                web_events["rerecord_episode"] = True
 
             # Handle rerecord logic first (before saving)
             if web_events["rerecord_episode"]:

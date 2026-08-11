@@ -213,3 +213,107 @@ def test_bimanual_robot_name_combines_both_sides() -> None:
     left, right = _make_pair()
     robot = BimanualRobot(left, right)
     assert robot.name == "bimanual_left_right"
+
+
+# --- Transient comm-failure retry ------------------------------------------
+#
+# Hardware testing (see work_log/2026-08-08_bimanual_inference_and_fixes.md)
+# showed recording failures follow whichever side is queried in the control
+# loop, not a specific cable/board - consistent with an occasional single
+# dropped status packet rather than a hard fault. lerobot's own single-arm
+# robots call `bus.sync_read(...)` with zero retries, so any one-off miss
+# would otherwise kill the whole session; `_with_retry` absorbs that per side.
+
+
+def test_with_retry_returns_immediately_on_success() -> None:
+    from lelab.utils.bimanual import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        return "ok"
+
+    assert _with_retry("left", fn) == "ok"
+    assert calls["n"] == 1
+
+
+def test_with_retry_recovers_from_transient_connection_error(monkeypatch) -> None:
+    from lelab.utils import bimanual
+
+    monkeypatch.setattr(bimanual.time, "sleep", lambda s: None)
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ConnectionError("no status packet")
+        return "recovered"
+
+    assert bimanual._with_retry("right", fn) == "recovered"
+    assert calls["n"] == 3
+
+
+def test_with_retry_raises_after_exhausting_attempts(monkeypatch) -> None:
+    import pytest
+
+    from lelab.utils import bimanual
+
+    monkeypatch.setattr(bimanual.time, "sleep", lambda s: None)
+
+    def fn():
+        raise ConnectionError("no status packet")
+
+    with pytest.raises(ConnectionError, match="no status packet"):
+        bimanual._with_retry("right", fn)
+
+
+def test_bimanual_robot_get_observation_retries_only_the_failing_side(monkeypatch) -> None:
+    """A transient failure on one arm must not affect the other, and must not
+    surface once the failing side recovers within the retry budget."""
+    from lelab.utils import bimanual
+    from lelab.utils.bimanual import BimanualRobot
+
+    monkeypatch.setattr(bimanual.time, "sleep", lambda s: None)
+
+    left, right = _make_pair()
+    calls = {"n": 0}
+    real_right_get_observation = right.get_observation
+
+    def flaky_get_observation():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("no status packet")
+        return real_right_get_observation()
+
+    right.get_observation = flaky_get_observation
+    robot = BimanualRobot(left, right)
+
+    obs = robot.get_observation()
+
+    assert calls["n"] == 2  # failed once, succeeded on retry
+    assert "left_shoulder_pan.pos" in obs
+    assert "right_shoulder_pan.pos" in obs
+
+
+def test_bimanual_teleoperator_get_action_propagates_persistent_failure(monkeypatch) -> None:
+    """A side that never recovers within the retry budget must still raise -
+    the retry absorbs one-off misses, not a genuine disconnect."""
+    import pytest
+
+    from lelab.utils import bimanual
+    from lelab.utils.bimanual import BimanualTeleoperator
+
+    monkeypatch.setattr(bimanual.time, "sleep", lambda s: None)
+
+    left, right = _make_pair()
+
+    def always_fails():
+        raise ConnectionError("no status packet")
+
+    right.get_action = always_fails
+    teleop = BimanualTeleoperator(left, right)
+
+    with pytest.raises(ConnectionError, match="no status packet"):
+        teleop.get_action()

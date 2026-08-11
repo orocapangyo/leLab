@@ -225,6 +225,7 @@ const InferenceModal: React.FC<Props> = ({
         fps: DEFAULT_FPS,
       };
     }
+    const isBimanual = robot.mode === "bimanual";
     try {
       await startInference(baseUrl, fetchWithHeaders, {
         follower_port: robot.follower_port,
@@ -234,6 +235,15 @@ const InferenceModal: React.FC<Props> = ({
         cameras: cameraDict,
         duration_s: durationS,
         robot_type: robot.robot_type || "so101",
+        // Bimanual: send the right follower so the backend runs the 12-DoF
+        // in-process rollout. Left arm uses the fields above.
+        ...(isBimanual
+          ? {
+              right_follower_port: robot.right_follower_port,
+              right_follower_config: robot.right_follower_config,
+              right_robot_type: robot.right_robot_type,
+            }
+          : {}),
       });
       onOpenChange(false);
       navigate("/inference");

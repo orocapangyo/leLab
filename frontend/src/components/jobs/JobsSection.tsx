@@ -57,18 +57,33 @@ const JobsSection: React.FC = () => {
   const [inferenceStep, setInferenceStep] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const [next, hub] = await Promise.all([
-        listJobs(baseUrl, fetchWithHeaders, LIMIT),
-        listHubJobs(baseUrl, fetchWithHeaders),
-      ]);
-      setJobs(next);
-      setHubJobs(hub.jobs);
-      setHubModels(hub.models);
-      setHubAuthenticated(hub.authenticated);
+    // Fetch local and hub jobs independently: a hub (HF Cloud) failure — e.g.
+    // no token, or a token missing the job.read scope — must NOT hide the
+    // local training/inference jobs, which don't depend on the hub at all.
+    // Previously a single Promise.all meant any hub error dropped the whole
+    // list, so locally-trained models silently vanished from the UI.
+    const [localRes, hubRes] = await Promise.allSettled([
+      listJobs(baseUrl, fetchWithHeaders, LIMIT),
+      listHubJobs(baseUrl, fetchWithHeaders),
+    ]);
+
+    if (localRes.status === "fulfilled") {
+      setJobs(localRes.value);
       setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } else {
+      setError(
+        localRes.reason instanceof Error ? localRes.reason.message : String(localRes.reason)
+      );
+    }
+
+    if (hubRes.status === "fulfilled") {
+      setHubJobs(hubRes.value.jobs);
+      setHubModels(hubRes.value.models);
+      setHubAuthenticated(hubRes.value.authenticated);
+    } else {
+      // Non-fatal: leave any previously-loaded hub state untouched and just
+      // treat the cloud side as unauthenticated/empty for this pass.
+      setHubAuthenticated(false);
     }
   }, [baseUrl, fetchWithHeaders]);
 

@@ -14,6 +14,11 @@ export interface StartInferenceRequest {
   }>;
   duration_s: number;
   robot_type: string;
+  // Bimanual (right follower). When right_follower_port is set the backend
+  // runs an in-process 12-DoF rollout instead of the single-arm subprocess.
+  right_follower_port?: string;
+  right_follower_config?: string;
+  right_robot_type?: string;
 }
 
 export interface InferenceStatus {

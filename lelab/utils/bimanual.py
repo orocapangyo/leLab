@@ -48,14 +48,53 @@ calibration file keyed by one `id`, which doesn't apply to a left+right pair).
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from lerobot.robots import Robot
 from lerobot.teleoperators import Teleoperator
 
+logger = logging.getLogger(__name__)
+
 _LEFT = "left_"
 _RIGHT = "right_"
+
+# lerobot's OmxFollower/OmxLeader (and most single-arm robots) call
+# `bus.sync_read(...)` with the library default `num_retry=0`, i.e. exactly
+# one attempt - any single dropped/corrupted status packet raises
+# `ConnectionError` immediately. That default lives in lerobot's own call
+# sites, not something lelab can pass through. In bimanual mode each control
+# loop tick does 4 of these round-trips (left+right x follower+leader) instead
+# of 2, doubling the exposure to a one-off miss, and hardware testing showed
+# failures aren't tied to a specific cable/board - they follow whichever side
+# is queried, consistent with an occasional transient miss rather than a
+# hard fault. Retrying just the side that failed - a few times, with a short
+# backoff - absorbs that without masking a genuine persistent disconnect
+# (which keeps failing every retry and still raises).
+_TRANSIENT_RETRIES = 3
+_TRANSIENT_RETRY_DELAY_S = 0.01
+
+
+def _with_retry(label: str, fn):
+    last_exc: ConnectionError | None = None
+    for attempt in range(_TRANSIENT_RETRIES):
+        try:
+            return fn()
+        except ConnectionError as exc:
+            last_exc = exc
+            if attempt < _TRANSIENT_RETRIES - 1:
+                logger.warning(
+                    "Bimanual %s comm attempt %d/%d failed, retrying: %s",
+                    label,
+                    attempt + 1,
+                    _TRANSIENT_RETRIES,
+                    exc,
+                )
+                time.sleep(_TRANSIENT_RETRY_DELAY_S)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _prefix(d: dict, prefix: str) -> dict:
@@ -96,12 +135,18 @@ class _BimanualBusShim:
 class BimanualRobotConfig:
     left: Any
     right: Any
+    # lerobot's rollout code (build_rollout_context, base strategy) logs
+    # `cfg.robot.type`; provide it so an in-process bimanual rollout that
+    # feeds this config through that machinery doesn't AttributeError. Not a
+    # draccus-registered choice - purely a label.
+    type: str = "bimanual_follower"
 
 
 @dataclass
 class BimanualTeleoperatorConfig:
     left: Any
     right: Any
+    type: str = "bimanual_leader"
 
 
 class _BimanualDevice:
@@ -124,6 +169,15 @@ class _BimanualDevice:
     @property
     def name(self) -> str:
         return f"bimanual_{getattr(self.left, 'name', 'left')}_{getattr(self.right, 'name', 'right')}"
+
+    @property
+    def robot_type(self) -> str:
+        # lerobot's Robot.__init__ sets `self.robot_type = self.name`, but we
+        # deliberately skip that __init__ (see module docstring), so mirror the
+        # convention here. The rollout path wraps the robot in ThreadSafeRobot,
+        # whose `robot_type` delegates to `self._robot.robot_type` - without
+        # this the in-process bimanual rollout dies with AttributeError.
+        return self.name
 
     @property
     def is_connected(self) -> bool:
@@ -191,14 +245,14 @@ class BimanualRobot(_BimanualDevice, Robot):
 
     def get_observation(self) -> dict:
         return {
-            **_prefix(self.left.get_observation(), _LEFT),
-            **_prefix(self.right.get_observation(), _RIGHT),
+            **_prefix(_with_retry("left get_observation", self.left.get_observation), _LEFT),
+            **_prefix(_with_retry("right get_observation", self.right.get_observation), _RIGHT),
         }
 
     def send_action(self, action: dict) -> dict:
         left_action, right_action = _split(action)
-        sent_left = self.left.send_action(left_action)
-        sent_right = self.right.send_action(right_action)
+        sent_left = _with_retry("left send_action", lambda: self.left.send_action(left_action))
+        sent_right = _with_retry("right send_action", lambda: self.right.send_action(right_action))
         return {**_prefix(sent_left, _LEFT), **_prefix(sent_right, _RIGHT)}
 
 
@@ -220,8 +274,8 @@ class BimanualTeleoperator(_BimanualDevice, Teleoperator):
 
     def get_action(self) -> dict:
         return {
-            **_prefix(self.left.get_action(), _LEFT),
-            **_prefix(self.right.get_action(), _RIGHT),
+            **_prefix(_with_retry("left get_action", self.left.get_action), _LEFT),
+            **_prefix(_with_retry("right get_action", self.right.get_action), _RIGHT),
         }
 
     @property
