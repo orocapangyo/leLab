@@ -77,6 +77,11 @@ def friendly_hint(error_text: str | None) -> str | None:
         return "A camera doesn't support the configured resolution — open camera settings and click Auto."
     if "permission" in low and ("port" in low or "com" in low):
         return "Couldn't open the serial port — close anything else using it, or run `lelab --stop`."
+    if "relative-action" in low or "relative chunk actions" in low:
+        return (
+            "This policy was trained with relative actions and needs RTC (chunked) inference. "
+            "Update lelab and try again — recent versions enable that automatically."
+        )
     return None
 
 
